@@ -146,6 +146,49 @@ def test_is_snap_browser(path, expected):
     assert admin._is_snap_browser(path) == expected
 
 
+def test_doctor_probe_preserves_snap_bin_env_symlink(monkeypatch, tmp_path):
+    target = tmp_path / "usr" / "bin" / "snap"
+    target.parent.mkdir(parents=True)
+    target.write_text("#!/bin/sh\n")
+    snap_bin = tmp_path / "snap" / "bin"
+    snap_bin.mkdir(parents=True)
+    chromium = snap_bin / "chromium"
+    chromium.symlink_to(target)
+
+    monkeypatch.setenv("BH_CHROME_PATH", str(chromium))
+    monkeypatch.delenv("CHROME_PATH", raising=False)
+
+    name, path = admin._doctor_probe_chrome_binary_for_snap()
+
+    assert name == "chromium"
+    assert path == str(chromium)
+    assert admin._is_snap_browser(path)
+
+
+def test_doctor_probe_preserves_snap_bin_path_symlink(monkeypatch, tmp_path):
+    target = tmp_path / "usr" / "bin" / "snap"
+    target.parent.mkdir(parents=True)
+    target.write_text("#!/bin/sh\n")
+    snap_bin = tmp_path / "snap" / "bin"
+    snap_bin.mkdir(parents=True)
+    chromium = snap_bin / "chromium"
+    chromium.symlink_to(target)
+
+    monkeypatch.delenv("BH_CHROME_PATH", raising=False)
+    monkeypatch.delenv("CHROME_PATH", raising=False)
+
+    def fake_which(cmd):
+        return str(chromium) if cmd == "chromium" else None
+
+    monkeypatch.setattr("shutil.which", fake_which)
+
+    name, path = admin._doctor_probe_chrome_binary_for_snap()
+
+    assert name == "chromium"
+    assert path == str(chromium)
+    assert admin._is_snap_browser(path)
+
+
 def test_run_doctor_prints_snap_detect_on_linux_when_probe_is_snap(monkeypatch, capsys):
     monkeypatch.setattr(admin, "_version", lambda: "0.1.0")
     monkeypatch.setattr(admin, "_install_mode", lambda: "git")

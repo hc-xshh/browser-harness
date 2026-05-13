@@ -230,8 +230,17 @@ def _is_snap_browser(path: str) -> bool:
     return bool(path) and "/snap/" in path.lower()
 
 
+def _doctor_snap_probe_path(path: str) -> str:
+    raw = str(path)
+    try:
+        resolved = os.path.realpath(raw)
+    except OSError:
+        resolved = raw
+    return raw if _is_snap_browser(raw) else resolved
+
+
 def _doctor_probe_chrome_binary_for_snap():
-    """Return (label, resolved_path) for the first Chrome/Chromium binary found, else (None, None).
+    """Return (label, probe_path) for the first Chrome/Chromium binary found, else (None, None).
 
     Honors BH_CHROME_PATH and CHROME_PATH before searching PATH for common names.
     """
@@ -244,7 +253,7 @@ def _doctor_probe_chrome_binary_for_snap():
         p = Path(raw).expanduser()
         try:
             if p.is_file():
-                return (p.name, os.path.realpath(str(p)))
+                return (p.name, _doctor_snap_probe_path(str(p)))
         except OSError:
             continue
     for cmd in ("google-chrome-stable", "google-chrome", "chromium-browser", "chromium"):
@@ -252,7 +261,7 @@ def _doctor_probe_chrome_binary_for_snap():
         if not w:
             continue
         try:
-            return (cmd, os.path.realpath(w))
+            return (cmd, _doctor_snap_probe_path(w))
         except OSError:
             continue
     return (None, None)
