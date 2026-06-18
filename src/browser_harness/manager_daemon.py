@@ -49,14 +49,13 @@ class BrowserLease:
     local_debug_port: int | None = None
     cloud_browser_id: str | None = None
     cloud_live_url: str | None = None
-    allowed_agents: list[str] = field(default_factory=list)
-    active_execution: dict | None = None
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     last_used_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
 
     @classmethod
     def from_json(cls, data: dict) -> "BrowserLease":
-        return cls(**data)
+        fields = cls.__dataclass_fields__
+        return cls(**{key: value for key, value in data.items() if key in fields})
 
     def binding(self) -> dict:
         return {
@@ -77,7 +76,6 @@ class Manager:
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self.leases: dict[str, BrowserLease] = {}
-        self.active_by_agent: dict[str, str] = {}
         self.next_seq = 0
         self._load()
 
@@ -87,16 +85,13 @@ class Manager:
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return
         self.next_seq = int(data.get("next_seq") or 0)
-        self.active_by_agent = dict(data.get("active_by_agent") or {})
         for item in data.get("leases") or []:
             lease = BrowserLease.from_json(item)
-            lease.active_execution = None
             self.leases[lease.browser_id] = lease
 
     def _persist(self):
         data = {
             "next_seq": self.next_seq,
-            "active_by_agent": self.active_by_agent,
             "leases": [asdict(v) for v in self.leases.values()],
         }
         tmp = self.root / "registry.json.tmp"
@@ -116,6 +111,8 @@ class Manager:
                 return self.switch(req)
             if op == "close":
                 return self.close(req)
+            if op == "close_owned":
+                return self.close_owned(req)
             if op == "lock":
                 return self.lock(req)
             if op == "unlock":
@@ -149,8 +146,7 @@ class Manager:
                     "backend": public_backend(lease),
                     "owner": lease.owner_agent_id,
                     "owned_by_this_agent": lease.run_id == run_id and lease.owner_agent_id == agent_id,
-                    "shared": len(lease.allowed_agents) > 1,
-                    "state": "busy" if lease.active_execution else "ready",
+                    "state": "ready",
                     **({"cloud_browser_id": lease.cloud_browser_id} if lease.cloud_browser_id else {}),
                     **({"live_url": lease.cloud_live_url} if lease.cloud_live_url else {}),
                 })
@@ -188,8 +184,6 @@ class Manager:
             lease = self.leases.get(browser_id)
             if not lease:
                 return error("not-found", "browser id not found", ["browser_list", "browser_new"])
-            if agent_id not in lease.allowed_agents:
-                lease.allowed_agents.append(agent_id)
             lease.last_used_at_ms = int(time.time() * 1000)
             self._persist()
             return ready_response(lease)
@@ -197,64 +191,63 @@ class Manager:
     def close(self, req: dict) -> dict:
         cleanup = None
         with self._lock:
-            _run_id, agent_id = run_agent(req)
-            client_id = req.get("client_id") or agent_id
             browser_id = req.get("browser_id")
             if not browser_id:
                 return error("bad-request", "browser id is required; use browser_close(id)", ["browser_list"])
             lease = self.leases.get(browser_id)
             if not lease:
                 return {"ok": True, "ready": False, "state": "not-found", "id": browser_id}
-            active = lease.active_execution or {}
-            if active and active.get("client_id") != client_id:
-                return error("busy", "browser is currently active in another browser-harness process", ["wait"])
             cleanup = lease
             self.leases.pop(browser_id, None)
-            self.active_by_agent = {k: v for k, v in self.active_by_agent.items() if v != browser_id}
             self._persist()
             resp = {"ok": True, "ready": False, "state": "closed", "id": browser_id}
         if cleanup is not None:
             cleanup_backend(cleanup)
         return resp
 
-    def lock(self, req: dict) -> dict:
+    def close_owned(self, req: dict) -> dict:
+        cleanup = []
         with self._lock:
-            _run_id, agent_id = run_agent(req)
-            client_id = req.get("client_id") or agent_id
+            run_id, agent_id = run_agent(req)
+            owned_ids = [
+                browser_id
+                for browser_id, lease in self.leases.items()
+                if lease.run_id == run_id and lease.owner_agent_id == agent_id
+            ]
+            for browser_id in owned_ids:
+                cleanup.append(self.leases.pop(browser_id))
+            self._persist()
+        for lease in cleanup:
+            cleanup_backend(lease)
+        return {
+            "ok": True,
+            "ready": False,
+            "state": "closed-owned",
+            "closed": [lease.browser_id for lease in cleanup],
+        }
+
+    def lock(self, req: dict) -> dict:
+        """Compatibility no-op for old manager clients.
+
+        Browser ids are explicit shared handles now. Selecting the same browser
+        from multiple processes is allowed; callers that still ask for a lock
+        get a stable success response without exclusive ownership.
+        """
+        with self._lock:
             browser_id = req.get("browser_id")
             if not browser_id:
                 return error("bad-request", "browser id is required; call browser(id)", ["browser_new", "browser_list"])
             lease = self.leases.get(browser_id)
             if not lease:
                 return error("not-found", "browser id not found", ["browser_list", "browser_new"])
-            if agent_id not in lease.allowed_agents:
-                lease.allowed_agents.append(agent_id)
-            active = lease.active_execution or {}
-            if active and active.get("client_id") != client_id:
-                return error("busy", "browser is currently active in another browser-harness process", ["wait", "browser_new"])
-            if active and active.get("client_id") == client_id:
-                return {"ok": True, "state": "ready", "browser_id": browser_id, "lock_id": active["lock_id"]}
-            lock_id = f"lk_{int(time.time() * 1000):x}_{secrets.token_hex(4)}"
-            lease.active_execution = {"agent_id": agent_id, "client_id": client_id, "lock_id": lock_id}
-            self._persist()
-            return {"ok": True, "state": "ready", "browser_id": browser_id, "lock_id": lock_id}
+            return {"ok": True, "state": "ready", "browser_id": browser_id, "lock_id": req.get("lock_id") or "shared"}
 
     def unlock(self, req: dict) -> dict:
         with self._lock:
-            _run_id, agent_id = run_agent(req)
-            client_id = req.get("client_id") or agent_id
             browser_id = req.get("browser_id")
             lease = self.leases.get(browser_id or "")
             if not lease:
                 return {"ok": True, "state": "not-found"}
-            active = lease.active_execution or {}
-            if (
-                active.get("agent_id") == agent_id
-                and active.get("client_id") == client_id
-                and active.get("lock_id") == req.get("lock_id")
-            ):
-                lease.active_execution = None
-                self._persist()
             return {"ok": True, "state": "released", "browser_id": browser_id}
 
     def _allocate_lease(self, run_id: str, agent_id: str, backend: str, profile_kind: str) -> BrowserLease:
@@ -282,7 +275,6 @@ class Manager:
             download_dir=str(download_dir),
             artifact_dir=str(artifact_dir),
             profile_dir=str(profile_dir),
-            allowed_agents=[agent_id],
         )
 
     def _new_browser_id(self) -> str:
@@ -483,7 +475,6 @@ def ready_public(lease: BrowserLease) -> dict:
         "state": "ready",
         "id": lease.browser_id,
         "backend": public_backend(lease),
-        "shared": len(lease.allowed_agents) > 1,
     }
     if lease.cloud_browser_id:
         state["cloud_browser_id"] = lease.cloud_browser_id
@@ -506,14 +497,6 @@ def error(state: str, reason: str, safe_actions: list[str]) -> dict:
 
 def run_agent(req: dict) -> tuple[str, str]:
     return sanitize(req.get("run_id") or "unknown-run"), sanitize(req.get("agent_id") or "unknown-agent")
-
-
-def agent_key(req: dict) -> str:
-    return agent_key_parts(*run_agent(req))
-
-
-def agent_key_parts(run_id: str, agent_id: str) -> str:
-    return f"{run_id}/{agent_id}"
 
 
 def sanitize(value: str) -> str:

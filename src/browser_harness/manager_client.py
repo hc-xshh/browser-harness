@@ -11,7 +11,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
 
 from . import context
 
@@ -23,13 +22,6 @@ class ManagerError(RuntimeError):
         super().__init__(reason)
 
 
-@dataclass
-class ExecutionLock:
-    browser_id: str
-    lock_id: str
-
-
-_active_lock: ExecutionLock | None = None
 _manager_started = False
 _CLIENT_ID = f"{os.getpid()}_{secrets.token_hex(4)}"
 
@@ -184,39 +176,5 @@ def close_browser(browser_id: str | None = None) -> dict:
     return request("close", browser_id=browser_id)
 
 
-def acquire_execution(browser_id: str) -> ExecutionLock:
-    resp = request("lock", browser_id=browser_id)
-    lock_id = resp.get("lock_id")
-    if not lock_id:
-        raise ManagerError({"state": "bad-response", "reason": "manager lock response missing lock_id"})
-    return ExecutionLock(browser_id=browser_id, lock_id=lock_id)
-
-
-def release_execution(lock: ExecutionLock) -> None:
-    try:
-        request("unlock", browser_id=lock.browser_id, lock_id=lock.lock_id)
-    except ManagerError:
-        # Process shutdown should not mask the task's real exception.
-        pass
-
-
-def release_active_execution_lock() -> None:
-    global _active_lock
-    lock = _active_lock
-    _active_lock = None
-    if lock is not None:
-        release_execution(lock)
-
-
-def acquire_execution_for_binding(binding: context.BrowserBinding) -> None:
-    global _active_lock
-    if not binding.browser_id:
-        return
-    if _active_lock and _active_lock.browser_id == binding.browser_id:
-        return
-    release_active_execution_lock()
-    _active_lock = acquire_execution(binding.browser_id)
-
-
-def active_lock() -> ExecutionLock | None:
-    return _active_lock
+def close_owned_browsers() -> dict:
+    return request("close_owned")

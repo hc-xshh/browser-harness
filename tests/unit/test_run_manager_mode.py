@@ -33,8 +33,7 @@ def test_manager_helper_call_enables_manager_mode_without_env(monkeypatch):
          patch("sys.stdout", stdout), \
          patch("browser_harness.run.print_update_banner"), \
          patch("browser_harness.run.ensure_daemon") as ensure_daemon, \
-         patch("browser_harness.run.browser_status", lambda: "manager helper mode ok"), \
-         patch("browser_harness.run.manager_client.release_active_execution_lock"):
+         patch("browser_harness.run.browser_status", lambda: "manager helper mode ok"):
         run.main()
 
     ensure_daemon.assert_not_called()
@@ -54,8 +53,7 @@ def test_browser_selector_call_enables_manager_mode(monkeypatch):
          patch("sys.stdout", stdout), \
          patch("browser_harness.run.print_update_banner"), \
          patch("browser_harness.run.ensure_daemon") as ensure_daemon, \
-         patch("browser_harness.run.browser", lambda browser_id: switched.append(browser_id) or {"id": browser_id}), \
-         patch("browser_harness.run.manager_client.release_active_execution_lock"):
+         patch("browser_harness.run.browser", lambda browser_id: switched.append(browser_id) or {"id": browser_id}):
         run.main()
 
     ensure_daemon.assert_not_called()
@@ -95,20 +93,16 @@ def test_browser_use_profile_runs_without_daemon(monkeypatch):
     assert stdout.getvalue().strip() == "{'selected': 'google-chrome:Default'}"
 
 
-def test_manager_mode_releases_execution_lock_on_exception(monkeypatch):
+def test_manager_mode_exception_propagates(monkeypatch):
     monkeypatch.setenv("BH_MANAGER_SOCKET", "/tmp/nonexistent-manager.sock")
     fake_stdin = StringIO("raise RuntimeError('boom')")
-    released = []
 
     with patch.object(sys, "argv", ["browser-harness"]), \
          patch("sys.stdin", fake_stdin), \
-         patch("browser_harness.run.print_update_banner"), \
-         patch("browser_harness.run.manager_client.release_active_execution_lock", lambda: released.append(True)):
+         patch("browser_harness.run.print_update_banner"):
         try:
             run.main()
         except RuntimeError as e:
             assert str(e) == "boom"
         else:
             raise AssertionError("expected RuntimeError")
-
-    assert released == [True]

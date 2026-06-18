@@ -21,9 +21,32 @@ def _manager_with_lease(tmp_path):
     return manager, lease
 
 
-def test_lock_is_exclusive_across_client_processes(tmp_path):
+def test_switch_allows_multiple_clients_to_select_same_browser(tmp_path):
     manager, lease = _manager_with_lease(tmp_path)
 
+    first = manager.handle({
+        "op": "switch",
+        "run_id": "run-1",
+        "agent_id": "agent-1",
+        "client_id": "client-1",
+        "browser_id": lease.browser_id,
+    })
+    second = manager.handle({
+        "op": "switch",
+        "run_id": "run-1",
+        "agent_id": "agent-1",
+        "client_id": "client-2",
+        "browser_id": lease.browser_id,
+    })
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert first["id"] == lease.browser_id
+    assert second["id"] == lease.browser_id
+
+
+def test_lock_endpoint_is_compatibility_noop(tmp_path):
+    manager, lease = _manager_with_lease(tmp_path)
     first = manager.handle({
         "op": "lock",
         "run_id": "run-1",
@@ -31,6 +54,7 @@ def test_lock_is_exclusive_across_client_processes(tmp_path):
         "client_id": "client-1",
         "browser_id": lease.browser_id,
     })
+
     second = manager.handle({
         "op": "lock",
         "run_id": "run-1",
@@ -40,39 +64,9 @@ def test_lock_is_exclusive_across_client_processes(tmp_path):
     })
 
     assert first["ok"] is True
-    assert second["ok"] is False
-    assert second["state"] == "busy"
-
-
-def test_unlock_requires_same_client_process(tmp_path):
-    manager, lease = _manager_with_lease(tmp_path)
-    first = manager.handle({
-        "op": "lock",
-        "run_id": "run-1",
-        "agent_id": "agent-1",
-        "client_id": "client-1",
-        "browser_id": lease.browser_id,
-    })
-
-    wrong = manager.handle({
-        "op": "unlock",
-        "run_id": "run-1",
-        "agent_id": "agent-1",
-        "client_id": "client-2",
-        "browser_id": lease.browser_id,
-        "lock_id": first["lock_id"],
-    })
-    second = manager.handle({
-        "op": "lock",
-        "run_id": "run-1",
-        "agent_id": "agent-1",
-        "client_id": "client-2",
-        "browser_id": lease.browser_id,
-    })
-
-    assert wrong["ok"] is True
-    assert second["ok"] is False
-    assert second["state"] == "busy"
+    assert second["ok"] is True
+    assert first["lock_id"] == "shared"
+    assert second["lock_id"] == "shared"
 
 
 def test_close_requires_explicit_id(tmp_path):
@@ -89,15 +83,10 @@ def test_close_requires_explicit_id(tmp_path):
     assert lease.browser_id in manager.leases
 
 
-def test_close_rejects_browser_busy_in_another_client(tmp_path):
+def test_close_removes_exact_browser_id(monkeypatch, tmp_path):
     manager, lease = _manager_with_lease(tmp_path)
-    manager.handle({
-        "op": "lock",
-        "run_id": "run-1",
-        "agent_id": "agent-1",
-        "client_id": "client-1",
-        "browser_id": lease.browser_id,
-    })
+    cleaned = []
+    monkeypatch.setattr(manager_daemon, "cleanup_backend", lambda lease: cleaned.append(lease.browser_id))
 
     resp = manager.handle({
         "op": "close",
@@ -107,9 +96,38 @@ def test_close_rejects_browser_busy_in_another_client(tmp_path):
         "browser_id": lease.browser_id,
     })
 
-    assert resp["ok"] is False
-    assert resp["state"] == "busy"
-    assert lease.browser_id in manager.leases
+    assert resp["ok"] is True
+    assert resp["state"] == "closed"
+    assert lease.browser_id not in manager.leases
+    assert cleaned == [lease.browser_id]
+
+
+def test_close_owned_closes_only_current_owner_browsers(monkeypatch, tmp_path):
+    manager = Manager(tmp_path)
+    cleaned = []
+    monkeypatch.setattr(manager_daemon, "cleanup_backend", lambda lease: cleaned.append(lease.browser_id))
+    owned = manager._allocate_lease("run-1", "agent-1", "cloud", "clean")
+    other_agent = manager._allocate_lease("run-1", "agent-2", "cloud", "clean")
+    other_run = manager._allocate_lease("run-2", "agent-1", "cloud", "clean")
+    manager.leases = {
+        owned.browser_id: owned,
+        other_agent.browser_id: other_agent,
+        other_run.browser_id: other_run,
+    }
+
+    resp = manager.handle({
+        "op": "close_owned",
+        "run_id": "run-1",
+        "agent_id": "agent-1",
+    })
+
+    assert resp["ok"] is True
+    assert resp["state"] == "closed-owned"
+    assert resp["closed"] == [owned.browser_id]
+    assert owned.browser_id not in manager.leases
+    assert other_agent.browser_id in manager.leases
+    assert other_run.browser_id in manager.leases
+    assert cleaned == [owned.browser_id]
 
 
 def test_short_browser_ids_have_no_prefix(tmp_path):
@@ -117,6 +135,29 @@ def test_short_browser_ids_have_no_prefix(tmp_path):
 
     assert len(lease.browser_id) == 6
     assert not lease.browser_id.startswith("br_")
+
+
+def test_lease_load_ignores_removed_hierarchy_fields(tmp_path):
+    payload = {
+        "browser_id": "abc123",
+        "run_id": "run-1",
+        "owner_agent_id": "agent-1",
+        "backend": "cloud",
+        "profile_kind": "clean",
+        "harness_daemon_name": "bh_123",
+        "runtime_dir": str(tmp_path / "r"),
+        "tmp_dir": str(tmp_path / "t"),
+        "download_dir": str(tmp_path / "downloads"),
+        "artifact_dir": str(tmp_path / "artifacts"),
+        "profile_dir": str(tmp_path / "profile"),
+        "allowed_agents": ["agent-1", "agent-2"],
+        "active_execution": {"client_id": "old-client"},
+    }
+
+    lease = manager_daemon.BrowserLease.from_json(payload)
+
+    assert lease.browser_id == "abc123"
+    assert lease.owner_agent_id == "agent-1"
 
 
 def test_cloud_live_url_is_exposed_in_ready_state(tmp_path):
@@ -169,7 +210,6 @@ def test_cloud_live_url_is_exposed_in_browser_list(tmp_path):
             "backend": "cloud",
             "owner": "agent-1",
             "owned_by_this_agent": True,
-            "shared": False,
             "state": "ready",
             "cloud_browser_id": "browser-123",
             "live_url": "https://live.example/session",

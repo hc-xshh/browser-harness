@@ -45,7 +45,6 @@ def browser(browser_id):
     """Select a managed browser id for this Python script."""
     resp = manager_client.switch_browser(browser_id)
     binding = manager_client.binding_from_response(resp)
-    manager_client.acquire_execution_for_binding(binding)
     context.activate_binding(binding)
     return manager_client.public_state(resp)
 
@@ -66,9 +65,16 @@ def browser_close(browser_id=None):
         raise ValueError("browser_close(id) requires a browser id")
     active = context.get_active_binding()
     closing_active = active and active.browser_id == browser_id
-    if closing_active:
-        manager_client.release_active_execution_lock()
     resp = manager_client.close_browser(browser_id)
     if closing_active:
+        context.clear_active_binding()
+    return manager_client.public_state(resp)
+
+
+def browser_close_owned():
+    """Close managed browsers created by this agent identity."""
+    active = context.get_active_binding()
+    resp = manager_client.close_owned_browsers()
+    if active and active.browser_id in set(resp.get("closed") or []):
         context.clear_active_binding()
     return manager_client.public_state(resp)

@@ -18,7 +18,6 @@ from pathlib import Path
 class AgentIdentity:
     run_id: str | None
     agent_id: str | None
-    parent_agent_id: str | None = None
 
     @property
     def degraded(self) -> bool:
@@ -28,7 +27,6 @@ class AgentIdentity:
         return {
             "run_id": self.run_id,
             "agent_id": self.agent_id,
-            "parent_agent_id": self.parent_agent_id,
             "identity_degraded": self.degraded,
         }
 
@@ -93,11 +91,7 @@ def agent_identity() -> AgentIdentity:
         or os.environ.get("CODEX_SUBAGENT_ID")
         or "main"
     )
-    return AgentIdentity(
-        run_id=run_id,
-        agent_id=agent_id,
-        parent_agent_id=os.environ.get("BH_PARENT_AGENT_ID") or os.environ.get("CODEX_PARENT_AGENT_ID"),
-    )
+    return AgentIdentity(run_id=run_id, agent_id=agent_id)
 
 
 def _cwd_run_id() -> str:

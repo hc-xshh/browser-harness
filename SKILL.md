@@ -28,7 +28,7 @@ print(page_info())
 PY
 ```
 
-`browser(id)` selects a browser for this script only. Do not rely on a current browser across separate shell commands.
+`browser(id)` selects a browser for this script only. Do not rely on a current browser across separate shell commands. Sharing an id means sharing that browser's tabs, cookies, downloads, and session state.
 
 Inspect managed browsers:
 
@@ -39,7 +39,7 @@ print(browser_status("abc123"))
 PY
 ```
 
-`browser_list()` shows `state: "busy"` while a script is actively using that browser, including the current script.
+`browser_list()` shows known managed browser ids and their owners.
 
 ## Choose Browser
 
@@ -49,6 +49,7 @@ PY
 - Managed browser page work: call `browser(id)` first in the script.
 - Subagent: if the parent gives an id, start browser scripts with `browser(id)` and do not close it unless asked.
 - Done with a private or cloud browser: `browser_close(id)`.
+- Done with all browsers you created: `browser_close_owned()`.
 
 ## Browser Helpers
 
@@ -61,6 +62,7 @@ browser_new("cloud")
 browser(id)
 browser_list()
 browser_close(id)
+browser_close_owned()
 ```
 
 `browser_profiles()` and `browser_use_profile(...)` are local setup calls. They do not start browser work.

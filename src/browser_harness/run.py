@@ -25,7 +25,7 @@ from .admin import (
     sync_local_profile,
     use_local_profile,
 )
-from . import auth, context, manager_client
+from . import auth, context
 from .helpers import *
 from .manager_helpers import *
 
@@ -75,6 +75,7 @@ _MANAGER_HELPER_NAMES = (
     "browser_switch",
     "browser_list",
     "browser_close",
+    "browser_close_owned",
 )
 
 _NO_DAEMON_HELPER_NAMES = {
@@ -209,10 +210,7 @@ def main():
             browser_switch(os.environ["BH_BROWSER_ID"])
         else:
             context.clear_active_binding()
-        try:
-            exec(code, globals())
-        finally:
-            manager_client.release_active_execution_lock()
+        exec(code, globals())
         return
 
     # Auto-bootstrap a cloud browser is opt-in via BU_AUTOSPAWN — BROWSER_USE_API_KEY alone
