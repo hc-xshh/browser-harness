@@ -1,3 +1,7 @@
+import json
+import socket
+import threading
+
 from browser_harness import manager_daemon
 from browser_harness import auth
 from browser_harness.manager_daemon import Manager
@@ -19,6 +23,33 @@ def _manager_with_lease(tmp_path):
     lease = manager._allocate_lease("run-1", "agent-1", "cloud", "clean")
     manager.leases[lease.browser_id] = lease
     return manager, lease
+
+
+def _send_to_handle_conn(manager, req):
+    left, right = socket.socketpair()
+    thread = threading.Thread(target=manager_daemon.handle_conn, args=(manager, right))
+    thread.start()
+    try:
+        left.sendall((json.dumps(req) + "\n").encode())
+        data = b""
+        while not data.endswith(b"\n"):
+            data += left.recv(4096)
+    finally:
+        left.close()
+    thread.join(timeout=1)
+    return json.loads(data)
+
+
+def test_handle_conn_requires_manager_token(monkeypatch, tmp_path):
+    manager = Manager(tmp_path)
+    monkeypatch.setattr(manager_daemon, "_server_token", "secret-token")
+
+    denied = _send_to_handle_conn(manager, {"op": "list", "token": "wrong"})
+    pong = _send_to_handle_conn(manager, {"meta": "ping", "token": "secret-token"})
+
+    assert denied["ok"] is False
+    assert denied["state"] == "forbidden"
+    assert pong["pong"] is True
 
 
 def test_switch_allows_multiple_clients_to_select_same_browser(tmp_path):

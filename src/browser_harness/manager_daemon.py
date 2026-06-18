@@ -11,12 +11,11 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import urllib.request
 
-from . import admin, auth, context
+from . import admin, auth, context, manager_runtime
 
 
 BU_API = "https://api.browser-use.com/api/v3"
@@ -28,6 +27,7 @@ MAC_BROWSER_PATHS = (
     "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
 )
+_server_token: str | None = None
 
 
 @dataclass
@@ -73,7 +73,7 @@ class BrowserLease:
 class Manager:
     def __init__(self, root: Path):
         self.root = root
-        self.root.mkdir(parents=True, exist_ok=True)
+        manager_runtime.ensure_private_dir(self.root)
         self._lock = threading.RLock()
         self.leases: dict[str, BrowserLease] = {}
         self.next_seq = 0
@@ -94,9 +94,7 @@ class Manager:
             "next_seq": self.next_seq,
             "leases": [asdict(v) for v in self.leases.values()],
         }
-        tmp = self.root / "registry.json.tmp"
-        tmp.write_text(json.dumps(data, indent=2))
-        os.replace(tmp, self.root / "registry.json")
+        manager_runtime.write_private_json(self.root / "registry.json", data)
 
     def handle(self, req: dict) -> dict:
         op = req.get("op")
@@ -263,6 +261,8 @@ class Manager:
         profile_dir = base / "profile"
         for p in (runtime_dir, tmp_dir, download_dir, artifact_dir, profile_dir):
             p.mkdir(parents=True, exist_ok=True)
+            if not manager_runtime.IS_WINDOWS:
+                os.chmod(p, 0o700)
         return BrowserLease(
             browser_id=browser_id,
             run_id=run_id,
@@ -331,7 +331,13 @@ def start_managed_backend(lease: BrowserLease):
         args.insert(-1, "--disable-gpu")
     if os.environ.get("BH_CHROME_NO_SANDBOX") == "1":
         args.insert(-1, "--no-sandbox")
-    proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    proc = subprocess.Popen(
+        args,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **manager_runtime.spawn_kwargs(),
+    )
     lease.local_process_id = proc.pid
     lease.local_debug_port = port
     wait_devtools(port)
@@ -505,15 +511,28 @@ def sanitize(value: str) -> str:
 
 
 def serve(socket_path: Path, root: Path):
+    global _server_token
+    manager_runtime.ensure_private_dir(root)
     socket_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        socket_path.unlink()
-    except FileNotFoundError:
-        pass
     manager = Manager(root)
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(str(socket_path))
-    os.chmod(socket_path, 0o600)
+    if manager_runtime.IS_WINDOWS:
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.bind(("127.0.0.1", 0))
+        _server_token = manager_runtime.new_token()
+        manager_runtime.write_private_json(socket_path, {"port": server.getsockname()[1], "token": _server_token})
+    else:
+        try:
+            socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        old_umask = os.umask(0o077)
+        try:
+            server.bind(str(socket_path))
+        finally:
+            os.umask(old_umask)
+        os.chmod(socket_path, 0o600)
+        _server_token = None
     server.listen(128)
     print(f"browser-harness manager listening on {socket_path}", file=sys.stderr, flush=True)
     try:
@@ -522,6 +541,11 @@ def serve(socket_path: Path, root: Path):
             threading.Thread(target=handle_conn, args=(manager, conn), daemon=True).start()
     finally:
         server.close()
+        if manager_runtime.IS_WINDOWS:
+            try:
+                socket_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def handle_conn(manager: Manager, conn: socket.socket):
@@ -536,7 +560,12 @@ def handle_conn(manager: Manager, conn: socket.socket):
             if not data:
                 return
             req = json.loads(data or b"{}")
-            resp = manager.handle(req)
+            if _server_token and req.get("token") != _server_token:
+                resp = error("forbidden", "invalid manager token", [])
+            elif req.get("meta") == "ping":
+                resp = {"pong": True, "pid": os.getpid()}
+            else:
+                resp = manager.handle(req)
         except Exception as e:
             resp = error("bad-request", str(e), [])
         conn.sendall((json.dumps(resp, default=str) + "\n").encode())
@@ -544,8 +573,9 @@ def handle_conn(manager: Manager, conn: socket.socket):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--socket", default=os.environ.get("BH_MANAGER_SOCKET") or str(Path(tempfile.gettempdir()) / "bhm" / "manager.sock"))
-    parser.add_argument("--root", default=os.environ.get("BH_MANAGER_ROOT") or str(Path(tempfile.gettempdir()) / "bhm"))
+    root = manager_runtime.default_root()
+    parser.add_argument("--socket", default=str(manager_runtime.default_endpoint(root)))
+    parser.add_argument("--root", default=str(root))
     args = parser.parse_args(argv)
     serve(Path(args.socket), Path(args.root))
 

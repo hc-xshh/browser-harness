@@ -91,6 +91,7 @@ Never put API keys in command-line arguments.
 - Use `js(...)` for DOM inspection or extraction when coordinates are the wrong tool.
 - After navigation, call `wait_for_load()`.
 - If the current tab is stale or internal, call `ensure_real_tab()`.
+- If a tab/session dies (`target-gone`, `browser session ended`), open a fresh tab; if status is not ready, create a new browser.
 - If redirected to a login wall, stop and ask the user. Do not type credentials from screenshots.
 - For anything helpers do not cover, use raw CDP: `cdp("Domain.method", params)`.
 

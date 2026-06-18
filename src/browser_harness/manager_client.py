@@ -1,18 +1,14 @@
 """Client for the browser-harness manager."""
 from __future__ import annotations
 
-from contextlib import contextmanager
-import json
 import os
 from pathlib import Path
 import secrets
-import socket
 import subprocess
 import sys
-import tempfile
 import time
 
-from . import context
+from . import context, manager_runtime
 
 
 class ManagerError(RuntimeError):
@@ -27,11 +23,11 @@ _CLIENT_ID = f"{os.getpid()}_{secrets.token_hex(4)}"
 
 
 def default_manager_root() -> str:
-    return os.environ.get("BH_MANAGER_ROOT") or str(Path(tempfile.gettempdir()) / "bhm")
+    return str(manager_runtime.default_root())
 
 
 def default_manager_socket() -> str:
-    return os.environ.get("BH_MANAGER_SOCKET") or str(Path(default_manager_root()) / "manager.sock")
+    return str(manager_runtime.default_endpoint(Path(default_manager_root())))
 
 
 def manager_socket() -> str:
@@ -45,14 +41,15 @@ def manager_socket() -> str:
 def ensure_manager_running(path: str | None = None) -> None:
     global _manager_started
     path = path or default_manager_socket()
-    if _manager_socket_alive(path):
+    endpoint = Path(path)
+    if _manager_socket_alive(endpoint):
         return
     root = Path(os.environ.get("BH_MANAGER_ROOT") or default_manager_root())
-    root.mkdir(parents=True, exist_ok=True)
-    with _start_lock(root):
-        if _manager_socket_alive(path):
+    manager_runtime.ensure_private_dir(root)
+    with manager_runtime.start_lock(root):
+        if _manager_socket_alive(endpoint):
             return
-        log = open(root / "manager.log", "ab")
+        log = manager_runtime.open_private_append(root / "manager.log")
         env = {**os.environ, "BH_MANAGER_SOCKET": path, "BH_MANAGER_ROOT": str(root)}
         try:
             subprocess.Popen(
@@ -61,68 +58,43 @@ def ensure_manager_running(path: str | None = None) -> None:
                 stdout=log,
                 stderr=log,
                 env=env,
-                start_new_session=True,
+                **manager_runtime.spawn_kwargs(),
             )
         finally:
             log.close()
         _manager_started = True
         deadline = time.time() + float(os.environ.get("BH_MANAGER_START_TIMEOUT", "10"))
         while time.time() < deadline:
-            if _manager_socket_alive(path):
+            if _manager_socket_alive(endpoint):
                 return
             time.sleep(0.05)
         raise ManagerError({"state": "manager-unavailable", "reason": f"manager did not start at {path}"})
 
 
-@contextmanager
-def _start_lock(root: Path):
-    lock_path = root / "manager.start.lock"
-    with open(lock_path, "a+b") as f:
-        if os.name == "nt":
-            import msvcrt
-            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
-            try:
-                yield
-            finally:
-                f.seek(0)
-                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-
-
-def _manager_socket_alive(path: str) -> bool:
-    try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(0.2)
-        s.connect(path)
-        s.close()
+def _manager_socket_alive(path: Path) -> bool:
+    if manager_runtime.ping(path, timeout=0.2):
         return True
+    if manager_runtime.IS_WINDOWS:
+        return False
+    try:
+        sock, _token = manager_runtime.connect(path, timeout=0.2)
     except OSError:
         return False
+    try:
+        sock.close()
+    except OSError:
+        pass
+    return True
 
 
 def request(op: str, **payload) -> dict:
     req = {"op": op, **context.agent_identity().payload(), "client_id": _CLIENT_ID, **payload}
     path = manager_socket()
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock, token = manager_runtime.connect(Path(path), timeout=float(os.environ.get("BH_MANAGER_TIMEOUT", "30")))
     try:
-        s.settimeout(float(os.environ.get("BH_MANAGER_TIMEOUT", "30")))
-        s.connect(path)
-        s.sendall((json.dumps(req) + "\n").encode())
-        data = b""
-        while not data.endswith(b"\n"):
-            chunk = s.recv(1 << 16)
-            if not chunk:
-                break
-            data += chunk
+        resp = manager_runtime.send_request(sock, token, req)
     finally:
-        s.close()
-    resp = json.loads(data or b"{}")
+        sock.close()
     if not isinstance(resp, dict):
         raise ManagerError({"state": "bad-response", "reason": "manager returned non-object JSON"})
     if resp.get("ok") is False:
