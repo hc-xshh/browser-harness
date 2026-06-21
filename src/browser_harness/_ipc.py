@@ -1,22 +1,23 @@
 """Daemon IPC plumbing. AF_UNIX socket on POSIX, TCP loopback on Windows."""
-import asyncio, json, os, re, secrets, socket, subprocess, sys, tempfile
+import asyncio, json, os, re, secrets, socket, subprocess, sys
 from pathlib import Path
+
+from . import paths
 
 IS_WINDOWS = sys.platform == "win32"
 # Two caller-supplied dirs:
 #   BH_RUNTIME_DIR — sock/port/pid. AF_UNIX sun_path is 104 bytes on macOS, so
 #       the runtime dir must be short. Caller is responsible for keeping it
 #       within budget. Falls back to BH_TMP_DIR (legacy single-dir callers),
-#       then to /tmp on POSIX (gettempdir() returns long /var/folders/... on
-#       macOS — unsafe for AF_UNIX) or tempfile.gettempdir() on Windows (TCP).
+#       then to the browser-harness runtime dir.
 #   BH_TMP_DIR — screenshots, debug overlays, daemon log. No path-length
 #       sensitivity; caller can use a deep persistent path.
 # When the caller supplies a per-instance dir for either purpose, files use
 # bare "bu" stems; otherwise "bu-<NAME>" disambiguates co-tenants.
 BH_TMP_DIR = os.environ.get("BH_TMP_DIR")
 BH_RUNTIME_DIR = os.environ.get("BH_RUNTIME_DIR") or BH_TMP_DIR
-_TMP = Path(BH_TMP_DIR or (tempfile.gettempdir() if IS_WINDOWS else "/tmp"))
-_RUNTIME = Path(BH_RUNTIME_DIR or (tempfile.gettempdir() if IS_WINDOWS else "/tmp"))
+_TMP = paths.tmp_dir()
+_RUNTIME = paths.ensure_private_dir(Path(BH_RUNTIME_DIR).expanduser().resolve()) if BH_RUNTIME_DIR else paths.runtime_dir()
 _TMP.mkdir(parents=True, exist_ok=True)
 _RUNTIME.mkdir(parents=True, exist_ok=True)
 _NAME_RE = re.compile(r"\A[A-Za-z0-9_-]{1,64}\Z")

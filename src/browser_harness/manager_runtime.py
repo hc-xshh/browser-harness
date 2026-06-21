@@ -9,7 +9,8 @@ import secrets
 import socket
 import subprocess
 import sys
-import tempfile
+
+from . import paths
 
 
 IS_WINDOWS = sys.platform == "win32"
@@ -18,13 +19,7 @@ IS_WINDOWS = sys.platform == "win32"
 def default_root() -> Path:
     if os.environ.get("BH_MANAGER_ROOT"):
         return Path(os.environ["BH_MANAGER_ROOT"])
-    if IS_WINDOWS:
-        base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
-        return Path(base) / "browser-harness" / "manager"
-    if os.environ.get("XDG_RUNTIME_DIR"):
-        return Path(os.environ["XDG_RUNTIME_DIR"]) / "browser-harness-manager"
-    uid = os.getuid() if hasattr(os, "getuid") else os.environ.get("USER") or "user"
-    return Path("/tmp") / f"bhm-{uid}"
+    return paths.runtime_dir() / "manager"
 
 
 def default_endpoint(root: Path | None = None) -> Path:

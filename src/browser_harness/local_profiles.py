@@ -12,6 +12,8 @@ import time
 import urllib.error
 import urllib.request
 
+from . import paths
+
 
 MARKER_URL_PREFIX = "https://browser-use.com/browser-use-profile-target/"
 INTERNAL_URL_PREFIXES = (
@@ -77,18 +79,14 @@ class LocalCandidate:
 
 
 def config_dir() -> Path:
-    if raw := os.environ.get("BH_CONFIG_DIR"):
-        return Path(raw).expanduser()
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "browser-harness"
-    if sys.platform == "win32":
-        base = os.environ.get("APPDATA")
-        return Path(base).expanduser() / "browser-harness" if base else Path.home() / "AppData" / "Roaming" / "browser-harness"
-    base = os.environ.get("XDG_CONFIG_HOME")
-    return Path(base).expanduser() / "browser-harness" if base else Path.home() / ".config" / "browser-harness"
+    return paths.config_dir()
 
 
 def profile_config_path() -> Path:
+    return config_dir() / "settings.json"
+
+
+def legacy_profile_config_path() -> Path:
     return config_dir() / "profile.json"
 
 
@@ -97,10 +95,13 @@ def get_default_profile_id() -> str | None:
         value = (os.environ.get(key) or "").strip()
         if value:
             return value
-    try:
-        data = json.loads(profile_config_path().read_text())
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
+    data = {}
+    for path in (profile_config_path(), legacy_profile_config_path()):
+        try:
+            data = json.loads(path.read_text())
+            break
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
     value = str(data.get("default_local_profile_id") or "").strip()
     return value or None
 

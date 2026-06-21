@@ -25,7 +25,7 @@ from .admin import (
     sync_local_profile,
     use_local_profile,
 )
-from . import auth, context
+from . import auth, context, telemetry
 from .helpers import *
 from .manager_helpers import *
 
@@ -56,6 +56,8 @@ Commands:
   browser-harness auth login --device-code   sign in from SSH/headless environments
   browser-harness auth status         show Browser Use Cloud auth state
   browser-harness auth logout         remove stored Browser Use Cloud auth
+  browser-harness skill               print the browser-harness skill text
+  browser-harness telemetry status    show anonymous telemetry opt-out state
   browser-harness --update [-y]    pull the latest version (agents: pass -y)
   browser-harness --reload         stop the daemon so next call picks up code changes
 """
@@ -174,8 +176,36 @@ def _print_json(value):
     print(json.dumps(value, indent=2, default=str))
 
 
+def _print_skill():
+    from importlib import resources
+    print(resources.files("browser_harness").joinpath("SKILL.md").read_text(), end="")
+
+
+def _telemetry_command(args):
+    if not args:
+        return "script"
+    first = args[0]
+    if first in {"-h", "--help"}:
+        return "help"
+    if first == "--version":
+        return "version"
+    if first in {"--doctor", "doctor"}:
+        return "doctor"
+    if first == "--update":
+        return "update"
+    if first == "--reload":
+        return "reload"
+    if first == "--debug-clicks":
+        return "debug-clicks"
+    if first in {"profiles", "use-profile", "open-profile", "auth", "skill", "telemetry"}:
+        return first
+    return "usage"
+
+
 def main():
     args = sys.argv[1:]
+    if not (args and args[0] == "telemetry"):
+        telemetry.capture("browser_harness.cli", {"command": _telemetry_command(args)})
     if args and args[0] in {"-h", "--help"}:
         print(HELP)
         return
@@ -214,6 +244,14 @@ def main():
         return
     if args and args[0] == "auth":
         sys.exit(auth.run_auth_cli(args[1:]))
+    if args and args[0] == "skill":
+        if len(args) != 1:
+            print("usage: browser-harness skill", file=sys.stderr)
+            sys.exit(2)
+        _print_skill()
+        return
+    if args and args[0] == "telemetry":
+        sys.exit(telemetry.run_telemetry_cli(args[1:]))
     if args and args[0] == "--update":
         yes = any(a in {"-y", "--yes"} for a in args[1:])
         sys.exit(run_update(yes=yes))

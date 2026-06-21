@@ -3,6 +3,8 @@ __pycache__/
 *.log
 .env
 .browser-harness-dev/
+build/
+dist/
 uv.lock
 *.egg-info/
 .idea/

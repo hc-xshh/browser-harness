@@ -9,11 +9,12 @@ from urllib.parse import urlparse
 
 from . import _ipc as ipc
 from . import context
+from . import paths
 
 
 CORE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = CORE_DIR.parent.parent
-AGENT_WORKSPACE = Path(os.environ.get("BH_AGENT_WORKSPACE", REPO_ROOT / "agent-workspace")).expanduser()
+AGENT_WORKSPACE = paths.workspace_dir()
 
 
 def _load_env():

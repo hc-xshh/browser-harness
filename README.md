@@ -23,9 +23,7 @@ One websocket to Chrome, nothing between. The agent writes what's missing during
 Paste into Claude Code or Codex:
 
 ```text
-Set up https://github.com/browser-use/browser-harness for me.
-
-Read `install.md` and follow the steps to install browser-harness and connect it to my browser.
+Install browser-harness with uv, register the skill from `browser-harness skill`, and connect it to my browser.
 ```
 
 The agent will open `chrome://inspect/#remote-debugging`. Tick the checkbox so the agent can connect to your browser:
@@ -51,8 +49,8 @@ Stealth, sub-agents, or headless deployment.<br>
 - `install.md` — first-time install and browser bootstrap
 - `SKILL.md` — day-to-day usage
 - `src/browser_harness/` — protected core package
-- `agent-workspace/agent_helpers.py` — helper code the agent edits
-- `agent-workspace/domain-skills/` — reusable site-specific skills the agent edits
+- `${XDG_CONFIG_HOME:-~/.config}/browser-harness/agent-workspace/agent_helpers.py` — helper code the agent edits
+- `${XDG_CONFIG_HOME:-~/.config}/browser-harness/agent-workspace/domain-skills/` — reusable site-specific skills the agent edits
 
 Plain `browser-harness` helper calls use the selected local browser profile. For isolated or cloud work, start with `browser_new("private")` or `browser_new("cloud")`, keep the returned short `id`, and call `browser(id)` before page helpers in each script; cloud responses include a `live_url` preview when available.
 
@@ -75,7 +73,7 @@ The dev launcher uses a short checkout-specific manager path under `/tmp`, so it
 PRs and improvements welcome. The best way to help: **contribute a new domain skill** under [agent-workspace/domain-skills/](agent-workspace/domain-skills/) for a site or task you use often (LinkedIn outreach, ordering on Amazon, filing expenses, etc.). Each skill teaches the agent the selectors, flows, and edge cases it would otherwise have to rediscover.
 
 - **Skills are written by the harness, not by you.** Just run your task with the agent — when it figures something non-obvious out, it files the skill itself (see [SKILL.md](SKILL.md)). Please don't hand-author skill files; agent-generated ones reflect what actually works in the browser.
-- Open a PR with the generated `agent-workspace/domain-skills/<site>/` folder — small and focused is great.
+- Open a PR with the generated `domain-skills/<site>/` folder copied into this repo's `agent-workspace/domain-skills/` examples — small and focused is great.
 - Bug fixes, docs tweaks, and helper improvements are equally welcome.
 - Browse existing skills (`github/`, `linkedin/`, `amazon/`, ...) to see the shape.
 
@@ -83,7 +81,7 @@ If you're not sure where to start, open an issue and we'll point you somewhere u
 
 ## Domain skills
 
-Set `BH_DOMAIN_SKILLS=1` to enable [agent-workspace/domain-skills/](agent-workspace/domain-skills/) — community-contributed per-site playbooks `goto_url` surfaces by domain. Contribute via PR.
+Set `BH_DOMAIN_SKILLS=1` to enable domain skills from the agent workspace. This repo's [agent-workspace/domain-skills/](agent-workspace/domain-skills/) directory contains examples to contribute via PR.
 
 ---
 

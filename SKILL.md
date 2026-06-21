@@ -1,6 +1,6 @@
 ---
-name: browser
-description: Control a browser with Python helpers. Use for web automation, scraping, testing, or interacting with pages.
+name: browser-harness
+description: Always use browser-harness for any web interaction: automation, scraping, testing, or site/app work.
 ---
 
 # browser-harness
@@ -87,6 +87,7 @@ Never put API keys in command-line arguments.
 
 - First navigation is `new_tab(url)`, not `goto_url(url)`.
 - Screenshots are the default way to understand and verify visible state: `capture_screenshot()`.
+- If using `view_image`, call it after `capture_screenshot()` returns the PNG path; do not parallelize capture and viewing.
 - Click visible targets by screenshot coordinates: `click_at_xy(x, y)`.
 - Use `js(...)` for DOM inspection or extraction when coordinates are the wrong tool.
 - After navigation, call `wait_for_load()`.
@@ -119,6 +120,6 @@ If you get stuck on a browser mechanic, check `interaction-skills/` for focused 
 
 ## Domain Skills
 
-Domain skills are off by default. If `BH_DOMAIN_SKILLS=1` and the task is site-specific, read every file in `agent-workspace/domain-skills/<site>/` before inventing an approach.
+Domain skills are off by default. If `BH_DOMAIN_SKILLS=1` and the task is site-specific, read every file in `$BH_AGENT_WORKSPACE/domain-skills/<site>/` before inventing an approach. Default workspace: `~/.config/browser-harness/agent-workspace`.
 
 When enabled, `goto_url(...)` returns up to 10 matching skill filenames for the current host.

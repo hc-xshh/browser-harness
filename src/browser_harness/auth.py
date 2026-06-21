@@ -23,6 +23,8 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
+from . import paths
+
 
 AUTH_BASE = "https://api.browser-use.com"
 # Browser Use currently exposes this registered CLI OAuth client. Keep an env
@@ -125,9 +127,7 @@ def auth_path() -> Path:
     override = os.environ.get("BH_AUTH_PATH")
     if override:
         return Path(override).expanduser()
-    config_home = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(config_home).expanduser() if config_home else Path.home() / ".config"
-    return base / "browser-harness" / "auth.json"
+    return paths.config_dir() / "auth.json"
 
 
 def load_auth_file(path: Path | None = None) -> dict:

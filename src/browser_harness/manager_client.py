@@ -87,6 +87,24 @@ def _manager_socket_alive(path: Path) -> bool:
     return True
 
 
+def stop_manager_if_running(path: str | None = None) -> bool:
+    endpoint = Path(path or default_manager_socket())
+    try:
+        sock, token = manager_runtime.connect(endpoint, timeout=0.5)
+    except (FileNotFoundError, ConnectionRefusedError, TimeoutError, OSError, ValueError, KeyError, TypeError):
+        return False
+    try:
+        manager_runtime.send_request(sock, token, {"meta": "shutdown"})
+        return True
+    except (OSError, ValueError, AttributeError):
+        return False
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
 def request(op: str, **payload) -> dict:
     req = {"op": op, **context.agent_identity().payload(), "client_id": _CLIENT_ID, **payload}
     path = manager_socket()

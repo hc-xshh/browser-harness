@@ -5,13 +5,37 @@ This is a **one-time prerequisite**, not part of the regular AI workflow. Do it 
 ## Install the command
 
 ```bash
-git clone https://github.com/browser-use/browser-harness
-cd browser-harness
-uv tool install -e .
+uv tool install browser-harness
 command -v browser-harness   # should print a path
 ```
 
-Editable (`-e`) keeps the command global while pointing at the real checkout, so edits to `agent-workspace/agent_helpers.py` take effect on the next call. Prefer a durable path (e.g. `~/Developer/browser-harness`), not `/tmp`.
+For browser-harness development, clone the repo into a durable path and run `uv tool install -e .` from the checkout.
+
+## Register the skill
+
+Install/register a skill named `browser-harness` with this trigger:
+
+```text
+Always use browser-harness for any web interaction: automation, scraping, testing, or site/app work.
+```
+
+Use this command for the skill body:
+
+```bash
+browser-harness skill
+```
+
+For Codex:
+
+```bash
+for root in "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.agents/skills"; do
+  rm -rf "$root/browser-harness" "$root/browser" "$root/browser-use"
+done
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/browser-harness"
+browser-harness skill > "${CODEX_HOME:-$HOME/.codex}/skills/browser-harness/SKILL.md"
+```
+
+Only remove stale user-installed browser skills, never bundled/vendor plugin caches.
 
 ## Connect to a browser
 
@@ -32,4 +56,6 @@ The canonical, fully-detailed connection reference and troubleshooting live in t
 
 ## Keeping current
 
-`browser-harness` prints an update banner when a newer release exists; run `browser-harness --update -y` to pull it.
+`browser-harness` prints an update banner when a newer PyPI release exists; run `browser-harness --update -y` when you decide to upgrade. `browser-harness --doctor` also checks the latest version. Telemetry is anonymous and opt-out with `browser-harness telemetry disable`.
+
+State lives under `${XDG_CONFIG_HOME:-~/.config}/browser-harness` by default: auth, selected profile, telemetry id, agent-workspace, runtime sockets, manager leases, logs, screenshots, and tmp files. Override with `BH_HOME` or `BROWSER_HARNESS_HOME`.

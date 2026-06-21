@@ -15,7 +15,7 @@ import threading
 import time
 import urllib.request
 
-from . import admin, auth, context, manager_runtime
+from . import admin, auth, context, manager_runtime, telemetry
 
 
 BU_API = "https://api.browser-use.com/api/v3"
@@ -164,13 +164,28 @@ class Manager:
                 start_managed_backend(lease)
         except auth.CloudAuthRequired as e:
             cleanup_backend(lease)
+            telemetry.capture("browser_harness.browser_new", {
+                "backend": backend,
+                "profile_kind": lease.profile_kind,
+                "result": "cloud-auth-required",
+            })
             return error("cloud-auth-required", str(e), ["browser-harness auth login"])
         except Exception as e:
             cleanup_backend(lease)
+            telemetry.capture("browser_harness.browser_new", {
+                "backend": backend,
+                "profile_kind": lease.profile_kind,
+                "result": "start-failed",
+            })
             return error("browser-start-failed", str(e), ["browser_new"])
         with self._lock:
             self.leases[lease.browser_id] = lease
             self._persist()
+        telemetry.capture("browser_harness.browser_new", {
+            "backend": public_backend(lease),
+            "profile_kind": lease.profile_kind,
+            "result": "ready",
+        })
         return ready_response(lease)
 
     def switch(self, req: dict) -> dict:
@@ -181,9 +196,14 @@ class Manager:
                 return error("bad-request", "browser_id is required", ["browser_list", "browser_new"])
             lease = self.leases.get(browser_id)
             if not lease:
+                telemetry.capture("browser_harness.browser_switch", {"result": "not-found"})
                 return error("not-found", "browser id not found", ["browser_list", "browser_new"])
             lease.last_used_at_ms = int(time.time() * 1000)
             self._persist()
+            telemetry.capture("browser_harness.browser_switch", {
+                "backend": public_backend(lease),
+                "result": "ready",
+            })
             return ready_response(lease)
 
     def close(self, req: dict) -> dict:
@@ -194,6 +214,7 @@ class Manager:
                 return error("bad-request", "browser id is required; use browser_close(id)", ["browser_list"])
             lease = self.leases.get(browser_id)
             if not lease:
+                telemetry.capture("browser_harness.browser_close", {"result": "not-found"})
                 return {"ok": True, "ready": False, "state": "not-found", "id": browser_id}
             cleanup = lease
             self.leases.pop(browser_id, None)
@@ -201,6 +222,10 @@ class Manager:
             resp = {"ok": True, "ready": False, "state": "closed", "id": browser_id}
         if cleanup is not None:
             cleanup_backend(cleanup)
+            telemetry.capture("browser_harness.browser_close", {
+                "backend": public_backend(cleanup),
+                "result": "closed",
+            })
         return resp
 
     def close_owned(self, req: dict) -> dict:
@@ -217,6 +242,10 @@ class Manager:
             self._persist()
         for lease in cleanup:
             cleanup_backend(lease)
+        telemetry.capture("browser_harness.browser_close_owned", {
+            "closed_count": len(cleanup),
+            "result": "closed",
+        })
         return {
             "ok": True,
             "ready": False,
@@ -534,21 +563,29 @@ def serve(socket_path: Path, root: Path):
         os.chmod(socket_path, 0o600)
         _server_token = None
     server.listen(128)
+    server.settimeout(0.2)
+    stop = threading.Event()
     print(f"browser-harness manager listening on {socket_path}", file=sys.stderr, flush=True)
     try:
-        while True:
-            conn, _ = server.accept()
-            threading.Thread(target=handle_conn, args=(manager, conn), daemon=True).start()
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                if stop.is_set():
+                    break
+                raise
+            threading.Thread(target=handle_conn, args=(manager, conn, stop), daemon=True).start()
     finally:
         server.close()
-        if manager_runtime.IS_WINDOWS:
-            try:
-                socket_path.unlink()
-            except FileNotFoundError:
-                pass
+        try:
+            socket_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
-def handle_conn(manager: Manager, conn: socket.socket):
+def handle_conn(manager: Manager, conn: socket.socket, stop: threading.Event | None = None):
     with conn:
         try:
             data = b""
@@ -564,6 +601,10 @@ def handle_conn(manager: Manager, conn: socket.socket):
                 resp = error("forbidden", "invalid manager token", [])
             elif req.get("meta") == "ping":
                 resp = {"pong": True, "pid": os.getpid()}
+            elif req.get("meta") == "shutdown":
+                resp = {"ok": True}
+                if stop:
+                    stop.set()
             else:
                 resp = manager.handle(req)
         except Exception as e:

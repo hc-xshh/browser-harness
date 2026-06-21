@@ -1,9 +1,9 @@
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -11,6 +11,8 @@ from pathlib import Path
 from . import _ipc as ipc
 from . import context
 from . import local_profiles
+from . import paths
+from . import telemetry
 
 
 def _process_start_time(pid):
@@ -106,7 +108,7 @@ def _process_start_time(pid):
 
 def _load_env():
     repo_root = Path(__file__).resolve().parents[2]
-    workspace = Path(os.environ.get("BH_AGENT_WORKSPACE", repo_root / "agent-workspace")).expanduser()
+    workspace = paths.workspace_dir()
     for p in (repo_root / ".env", workspace / ".env"):
         if not p.exists():
             continue
@@ -126,8 +128,8 @@ _load_env()
 
 NAME = os.environ.get("BU_NAME", "default")
 BU_API = "https://api.browser-use.com/api/v3"
-GH_RELEASES = "https://api.github.com/repos/browser-use/browser-harness/releases/latest"
-VERSION_CACHE = Path(tempfile.gettempdir()) / "bu-version-cache.json"
+PYPI_JSON = "https://pypi.org/pypi/browser-harness/json"
+VERSION_CACHE = paths.config_dir() / "version-cache.json"
 VERSION_CACHE_TTL = 24 * 3600
 DOCTOR_TEXT_LIMIT = 140
 
@@ -167,7 +169,7 @@ def _log_tail(name, tmp_dir=None):
 
 class _DaemonStartLock:
     def __init__(self, name, runtime_dir=None):
-        base = Path(runtime_dir) if runtime_dir else Path(tempfile.gettempdir())
+        base = Path(runtime_dir) if runtime_dir else paths.runtime_dir()
         self.path = base / f"bu-{name or NAME}.start.lock"
         self.file = None
 
@@ -794,20 +796,30 @@ def _cache_read():
 
 def _cache_write(data):
     try:
+        VERSION_CACHE.parent.mkdir(parents=True, exist_ok=True)
         VERSION_CACHE.write_text(json.dumps(data))
+        if sys.platform != "win32":
+            os.chmod(VERSION_CACHE, 0o600)
     except OSError:
         pass
 
 
 def _latest_release_tag(force=False):
-    """Return latest release tag from GitHub, or None. Cached for 24h to avoid hammering the API."""
+    """Return latest browser-harness version on PyPI, or None. Cached for 24h."""
     cache = _cache_read()
     now = time.time()
     if not force and cache.get("tag") and now - cache.get("fetched_at", 0) < VERSION_CACHE_TTL:
         return cache["tag"]
     try:
-        req = urllib.request.Request(GH_RELEASES, headers={"Accept": "application/vnd.github+json"})
-        tag = json.loads(urllib.request.urlopen(req, timeout=5).read()).get("tag_name") or ""
+        req = urllib.request.Request(
+            PYPI_JSON,
+            headers={"Accept": "application/json", "User-Agent": "browser-harness"},
+        )
+        data = json.loads(urllib.request.urlopen(req, timeout=5).read())
+        tag = data.get("info", {}).get("version") or ""
+        releases = data.get("releases") or {}
+        if releases:
+            tag = max(releases, key=_version_tuple)
     except Exception:
         return cache.get("tag")  # fall back to last known
     tag = tag.lstrip("v")
@@ -816,17 +828,16 @@ def _latest_release_tag(force=False):
 
 
 def _version_tuple(v):
-    """Best-effort semver parse. Non-numeric components sort as 0, so pre-releases may not rank perfectly."""
-    parts = []
-    for s in (v or "").split("."):
-        m = ""
-        for ch in s:
-            if ch.isdigit():
-                m += ch
-            else:
-                break
-        parts.append(int(m) if m else 0)
-    return tuple(parts)
+    """Best-effort PEP 440-ish key where rc/beta/alpha sort below final."""
+    m = re.match(r"^\s*v?(\d+(?:\.\d+)*)(?:(a|b|rc)(\d+))?", v or "", re.I)
+    if not m:
+        return (0, 0, 0, 3, 0)
+    nums = [int(p) for p in m.group(1).split(".")[:3]]
+    nums.extend([0] * (3 - len(nums)))
+    pre = (m.group(2) or "").lower()
+    pre_rank = {"a": 0, "b": 1, "rc": 2}.get(pre, 3)
+    pre_num = int(m.group(3) or 0)
+    return (*nums, pre_rank, pre_num)
 
 
 def check_for_update():
@@ -944,7 +955,7 @@ def run_doctor():
     if latest:
         print(f"  latest release    {latest}" + (" (update available)" if newer else ""))
     else:
-        print("  latest release    (could not reach github)")
+        print("  latest release    (could not reach PyPI)")
     if source_mismatch:
         print("[source-mismatch]")
         print(f"Current directory contains: {source_mismatch['cwd_source']}")
@@ -970,7 +981,19 @@ def run_doctor():
     row("profile-use installed", profile_use, "" if profile_use else "optional: curl -fsSL https://browser-use.com/profile.sh | sh")
     row("BROWSER_USE_API_KEY set", api_key, "" if api_key else "optional: needed only for cloud browsers / profile sync")
     # Core health = chrome + daemon. Profile-use/api-key are optional.
-    return 0 if (chrome and daemon) else 1
+    healthy = chrome and daemon
+    telemetry.capture("browser_harness.doctor", {
+        "install_mode": mode,
+        "chrome_running": chrome,
+        "daemon_alive": daemon,
+        "active_connections": len(connections),
+        "profile_use_installed": profile_use,
+        "cloud_auth_env": api_key,
+        "latest_known": bool(latest),
+        "update_available": newer,
+        "result": "ok" if healthy else "fail",
+    })
+    return 0 if healthy else 1
 
 
 def _prompt_yes(question, default_yes=True, yes=False):
@@ -996,13 +1019,14 @@ def run_update(yes=False):
     # version. Otherwise `newer=False` just means "couldn't compare" — proceed.
     if cur and latest and not newer:
         print(f"browser-harness is up to date ({cur}).")
+        telemetry.capture("browser_harness.update", {"install_mode": _install_mode(), "result": "up-to-date"})
         return 0
     if cur and latest:
         print(f"updating browser-harness: {cur} -> {latest}")
     elif latest:
         print(f"installed version unknown; will try to update to {latest}.")
     else:
-        print("could not reach github; will try to update anyway.")
+        print("could not reach PyPI; will try to update anyway.")
 
     mode = _install_mode()
     if mode == "git":
@@ -1010,23 +1034,30 @@ def run_update(yes=False):
         status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"], capture_output=True, text=True)
         if status.returncode != 0:
             print(f"git status failed: {status.stderr.strip()}", file=sys.stderr)
+            telemetry.capture("browser_harness.update", {"install_mode": mode, "result": "git-status-failed"})
             return 1
         if status.stdout.strip():
             print(f"refusing to update: uncommitted changes in {repo}", file=sys.stderr)
             print("commit or stash them first, or run `git -C %s pull` yourself." % repo, file=sys.stderr)
+            telemetry.capture("browser_harness.update", {"install_mode": mode, "result": "dirty-git"})
             return 1
         r = subprocess.run(["git", "-C", str(repo), "pull", "--ff-only"])
         if r.returncode != 0:
+            telemetry.capture("browser_harness.update", {"install_mode": mode, "result": "git-pull-failed"})
             return r.returncode
     elif mode == "pypi":
-        tool_upgrade = subprocess.run(["uv", "tool", "upgrade", "browser-harness"])
+        try:
+            tool_upgrade = subprocess.run(["uv", "tool", "upgrade", "browser-harness"])
+        except FileNotFoundError:
+            print("uv is required to update PyPI installs: https://docs.astral.sh/uv/getting-started/installation/", file=sys.stderr)
+            telemetry.capture("browser_harness.update", {"install_mode": mode, "result": "uv-missing"})
+            return 1
         if tool_upgrade.returncode != 0:
-            # Fall back to pip in case this wasn't a `uv tool install`.
-            pip = subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "browser-harness"])
-            if pip.returncode != 0:
-                return pip.returncode
+            telemetry.capture("browser_harness.update", {"install_mode": mode, "result": "uv-upgrade-failed"})
+            return tool_upgrade.returncode
     else:
         print("unknown install mode; can't auto-update.", file=sys.stderr)
+        telemetry.capture("browser_harness.update", {"install_mode": mode, "result": "unknown-install-mode"})
         return 1
 
     # Invalidate banner/tag cache so the new version doesn't keep nagging.
@@ -1040,5 +1071,12 @@ def run_update(yes=False):
             print("daemon stopped; it will auto-restart on next `browser-harness` call.")
         else:
             print("daemon left running on old code. run `browser-harness` and it'll use the new code after the daemon recycles.")
+    try:
+        from . import manager_client
+        if manager_client.stop_manager_if_running():
+            print("browser manager stopped; it will auto-restart on next manager call.")
+    except Exception:
+        pass
     print("update complete.")
+    telemetry.capture("browser_harness.update", {"install_mode": mode, "result": "updated"})
     return 0

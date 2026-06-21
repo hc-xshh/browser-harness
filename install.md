@@ -9,40 +9,71 @@ Use this file only for browser-harness install, browser connection setup, and co
 
 ## Recommended `browser-harness` setup
 
-Clone the repo once into a durable location, then install it as an editable tool so `browser-harness` works from any directory:
+Install the released package as a global uv tool:
 
 ```bash
-git clone https://github.com/browser-use/browser-harness
-cd browser-harness
-uv tool install -e .
+uv tool install browser-harness
 command -v browser-harness
 ```
 
-That keeps the command global while still pointing at the real repo checkout, so when the agent edits `agent-workspace/agent_helpers.py` the next `browser-harness` uses the new code immediately. Prefer a stable path like `~/Developer/browser-harness`, not `/tmp`.
+For browser-harness development, clone the repo into a durable path and use `uv tool install -e .` from the checkout. Normal users and other agents should use the PyPI package.
 
 ## Make browser-harness global for the current agent
 
-After the repo is installed, register this repo's `SKILL.md` with the agent you are using:
+After the command is installed, register a skill named `browser-harness` with this trigger:
 
-- **Codex**: add this file as a global skill at `$CODEX_HOME/skills/browser-harness/SKILL.md` (often `~/.codex/skills/browser-harness/SKILL.md`). A symlink to this repo's `SKILL.md` is fine.
+```text
+Always use browser-harness for any web interaction: automation, scraping, testing, or site/app work.
+```
+
+Use `browser-harness skill` to print the packaged skill text.
+
+Before registering it, remove stale user-installed browser skills that came from old browser-harness installs. Do not edit bundled/vendor plugin caches.
+
+- **Codex**: add the printed skill as a global skill at `$CODEX_HOME/skills/browser-harness/SKILL.md` (often `~/.codex/skills/browser-harness/SKILL.md`).
 
   ```bash
-  mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/browser-harness" && ln -sf "$PWD/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/browser-harness/SKILL.md"
+  for root in "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.agents/skills"; do
+    rm -rf "$root/browser-harness" "$root/browser" "$root/browser-use"
+  done
+  mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/browser-harness"
+  browser-harness skill > "${CODEX_HOME:-$HOME/.codex}/skills/browser-harness/SKILL.md"
   ```
 
-- **Claude Code**: add an import to `~/.claude/CLAUDE.md` that points at this repo's `SKILL.md`, for example `@~/Developer/browser-harness/SKILL.md`.
+- **Claude Code**: paste or import the output of `browser-harness skill` into the global instruction file Claude Code uses for reusable skills.
 
-This makes new Codex or Claude Code sessions in other folders load the runtime browser harness instructions automatically.
+- **Other agents**: tell the agent to install/register a skill named `browser-harness`, use the trigger above verbatim, and use `browser-harness skill` as the skill body.
+
+This makes new agent sessions in other folders load the runtime browser harness instructions automatically.
 
 ## Keeping the harness current
 
-- On each run, `browser-harness` prints `[browser-harness] update available: X -> Y` (once per day) when a newer GitHub release exists.
-- When you see that banner, run `browser-harness --update -y` yourself — don't ask the user. It pulls the new code (`git pull --ff-only` for editable clones, `uv tool upgrade browser-harness` for PyPI installs) and stops the running daemon so the next call picks up the new code. With `-y` it won't prompt.
+- On each run, `browser-harness` prints `[browser-harness] update available: X -> Y` (once per day) when a newer PyPI release exists.
+- `browser-harness --doctor` also checks the latest PyPI version.
+- When you see an update banner, decide whether to run `browser-harness --update -y`. It pulls the new code (`git pull --ff-only` for editable clones, `uv tool upgrade browser-harness` for PyPI installs) and stops the running daemon so the next call picks up the new code. With `-y` it won't prompt.
 - `--update` refuses to run on an editable clone with uncommitted changes. If that happens, tell the user and let them resolve the dirty worktree.
+- PyPI installs require `uv` for updates; there is no pip fallback.
 
 ## Maintenance commands
 
 - browser-harness --doctor — show version, install mode, daemon and Chrome state, and whether an update is pending.
+- browser-harness telemetry status — show opt-out telemetry state.
+- browser-harness telemetry disable — opt out of anonymous usage telemetry.
+
+## Files on disk
+
+By default browser-harness keeps its state under `${XDG_CONFIG_HOME:-~/.config}/browser-harness`:
+
+```text
+auth.json              Browser Use Cloud auth
+settings.json          selected local Chrome profile and future preferences
+telemetry.json         anonymous install id + telemetry opt-out
+agent-workspace/       agent-written helpers and domain skills
+runtime/               sockets, pids, manager leases, managed browser profiles
+tmp/                   logs, screenshots, scratch files
+```
+
+Override the whole home with `BH_HOME` or `BROWSER_HARNESS_HOME`. Override specific dirs with `BH_CONFIG_DIR`, `BH_AGENT_WORKSPACE`, `BH_RUNTIME_DIR`, or `BH_TMP_DIR`.
 
 ## Architecture
 
@@ -167,7 +198,7 @@ If the user hasn't said which connection method to use, default to Way 1 if Chro
      PY
      ```
 
-     If that hangs, escalate: kill all Chrome and daemon processes, then reopen Chrome and retry. On macOS/Linux, also remove `/tmp/bu-default.sock` and `/tmp/bu-default.pid` if they linger.
+     If that hangs, escalate: kill all Chrome and daemon processes, then reopen Chrome and retry. On macOS/Linux, also remove lingering `bu-default.sock` and `bu-default.pid` files under `${XDG_CONFIG_HOME:-~/.config}/browser-harness/runtime`.
 
 4. After any fix, retry step 1.
 
