@@ -52,7 +52,7 @@ If that prints page info, you're done. If not, run `browser-harness --doctor` an
 - **Way 1 (real profile):** in your Chrome, open `chrome://inspect/#remote-debugging` and tick "Allow remote debugging for this browser instance" (sticky, per-profile). On Chrome 144+, click Allow on the first-attach popup. Inherits your logins/extensions — best when the agent acts in your everyday browser.
 - **Way 2 (isolated profile, no popups):** launch Chrome with `--remote-debugging-port=9222 --user-data-dir=<non-default path>`, then set `BU_CDP_URL=http://127.0.0.1:9222`. Best for unattended automation.
 
-The canonical, fully-detailed connection reference and troubleshooting live in the repo root's `install.md`. Read it if the quick path above fails.
+The full connection reference and troubleshooting live in `docs/browser-connection.md`. Read it if the quick path above fails.
 
 ## Keeping current
 
