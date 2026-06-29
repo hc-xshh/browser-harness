@@ -31,5 +31,5 @@ def test_packaged_skill_frontmatter_is_valid_simple_yaml():
 
     assert metadata == {
         "name": "browser-use",
-        "description": "Direct browser control via CDP for web interaction: automation, scraping, testing, screenshots, and site/app work.",
+        "description": "Always use browser-use for any web interaction: automation, scraping, testing, or site/app work.",
     }
