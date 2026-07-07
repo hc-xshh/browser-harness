@@ -655,8 +655,8 @@ def _install_mode():
 
 def _cache_read():
     try:
-        return json.loads(VERSION_CACHE.read_text())
-    except (FileNotFoundError, ValueError):
+        return json.loads(VERSION_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return {}
 
 
