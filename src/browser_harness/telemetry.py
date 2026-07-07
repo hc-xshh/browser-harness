@@ -51,7 +51,7 @@ def _config_path() -> Path:
 
 def _load_config() -> dict:
     try:
-        return json.loads(_config_path().read_text())
+        return json.loads(_config_path().read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, ValueError):
         return {}
 
@@ -63,7 +63,7 @@ def _save_config(data: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if not parent_existed and platform.system() != "Windows":
             os.chmod(path.parent, 0o700)
-        path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         if platform.system() != "Windows":
             os.chmod(path, 0o600)
     except OSError:

@@ -1,12 +1,14 @@
 import os, sys, time, urllib.request
 from io import StringIO
 
-# Windows default stdout encoding is cp1252, which can't encode the 🐴 marker
-# helpers prepend to tab titles (or anything else outside Latin-1). Force UTF-8
-# so `print(page_info())` doesn't UnicodeEncodeError on Windows. Issue #124(4).
-if hasattr(sys.stdout, "reconfigure"):
-    try: sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception: pass
+# Windows default stdout/stderr encoding is cp1252
+# which can't encode the 🐴 marker helpers prepend to tab titles (or anything
+# else outside the locale charset). Force UTF-8 so `print(page_info())` and
+# tracebacks carrying page titles don't UnicodeEncodeError on Windows. #124(4).
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try: _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception: pass
 
 from .admin import (
     _version,
@@ -93,7 +95,8 @@ def _cloud_auth_configured():
 
 def _print_skill():
     from importlib import resources
-    print(resources.files("browser_harness").joinpath("SKILL.md").read_text(), end="")
+    # SKILL.md is UTF-8 (contains emoji); locale-codec read crashes on gbk Windows
+    print(resources.files("browser_harness").joinpath("SKILL.md").read_text(encoding="utf-8"), end="")
 
 
 def _telemetry_command(args):

@@ -1,5 +1,5 @@
 """CDP WS holder + IPC relay (Unix socket on POSIX, TCP loopback on Windows). One daemon per BU_NAME."""
-import asyncio, json, os, socket, sys, time, urllib.error, urllib.request
+import asyncio, json, os, platform, socket, sys, time, urllib.error, urllib.request
 from urllib.parse import urlparse
 from collections import deque
 from pathlib import Path
@@ -20,7 +20,7 @@ def _load_env():
 
 
 def _load_env_file(p):
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -35,36 +35,55 @@ SOCK = ipc.sock_addr(NAME)
 LOG = str(ipc.log_path(NAME))
 PID = str(ipc.pid_path(NAME))
 BUF = 500
-PROFILES = [
-    Path.home() / "Library/Application Support/Google/Chrome",
-    Path.home() / "Library/Application Support/Google/Chrome Canary",
-    Path.home() / "Library/Application Support/Comet",
-    Path.home() / "Library/Application Support/Arc/User Data",
-    Path.home() / "Library/Application Support/Dia/User Data",
-    Path.home() / "Library/Application Support/Microsoft Edge",
-    Path.home() / "Library/Application Support/Microsoft Edge Beta",
-    Path.home() / "Library/Application Support/Microsoft Edge Dev",
-    Path.home() / "Library/Application Support/Microsoft Edge Canary",
-    Path.home() / "Library/Application Support/BraveSoftware/Brave-Browser",
-    Path.home() / ".config/google-chrome",
-    Path.home() / ".config/chromium",
-    Path.home() / ".config/chromium-browser",
-    Path.home() / ".config/microsoft-edge",
-    Path.home() / ".config/microsoft-edge-beta",
-    Path.home() / ".config/microsoft-edge-dev",
-    Path.home() / ".var/app/org.chromium.Chromium/config/chromium",
-    Path.home() / ".var/app/com.google.Chrome/config/google-chrome",
-    Path.home() / ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
-    Path.home() / ".var/app/com.microsoft.Edge/config/microsoft-edge",
-    Path.home() / "AppData/Local/Google/Chrome/User Data",
-    Path.home() / "AppData/Local/Google/Chrome SxS/User Data",
-    Path.home() / "AppData/Local/Chromium/User Data",
-    Path.home() / "AppData/Local/Microsoft/Edge/User Data",
-    Path.home() / "AppData/Local/Microsoft/Edge Beta/User Data",
-    Path.home() / "AppData/Local/Microsoft/Edge Dev/User Data",
-    Path.home() / "AppData/Local/Microsoft/Edge SxS/User Data",
-    Path.home() / "AppData/Local/BraveSoftware/Brave-Browser/User Data",
-]
+_MAC_PROFILES = (
+    "Library/Application Support/Google/Chrome",
+    "Library/Application Support/Google/Chrome Canary",
+    "Library/Application Support/Comet",
+    "Library/Application Support/Arc/User Data",
+    "Library/Application Support/Dia/User Data",
+    "Library/Application Support/Microsoft Edge",
+    "Library/Application Support/Microsoft Edge Beta",
+    "Library/Application Support/Microsoft Edge Dev",
+    "Library/Application Support/Microsoft Edge Canary",
+    "Library/Application Support/BraveSoftware/Brave-Browser",
+)
+_LINUX_PROFILES = (
+    ".config/google-chrome",
+    ".config/chromium",
+    ".config/chromium-browser",
+    ".config/microsoft-edge",
+    ".config/microsoft-edge-beta",
+    ".config/microsoft-edge-dev",
+    ".var/app/org.chromium.Chromium/config/chromium",
+    ".var/app/com.google.Chrome/config/google-chrome",
+    ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
+    ".var/app/com.microsoft.Edge/config/microsoft-edge",
+)
+_WINDOWS_PROFILES = (  # relative to %LOCALAPPDATA%; SxS = Canary channel
+    "Google/Chrome/User Data",
+    "Google/Chrome SxS/User Data",
+    "Google/Chrome Beta/User Data",
+    "Google/Chrome Dev/User Data",
+    "Chromium/User Data",
+    "Microsoft/Edge/User Data",
+    "Microsoft/Edge Beta/User Data",
+    "Microsoft/Edge Dev/User Data",
+    "Microsoft/Edge SxS/User Data",
+    "BraveSoftware/Brave-Browser/User Data",
+)
+
+
+def profile_dirs(system=None):
+    system = system or platform.system()
+    if system == "Windows":
+        local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData/Local")
+        return [local / p for p in _WINDOWS_PROFILES]
+    if system == "Darwin":
+        return [Path.home() / p for p in _MAC_PROFILES]
+    return [Path.home() / p for p in _LINUX_PROFILES]
+
+
+PROFILES = profile_dirs()
 INTERNAL = ("chrome://", "chrome-untrusted://", "devtools://", "chrome-extension://", "about:")
 BU_API = "https://api.browser-use.com/api/v3"
 REMOTE_ID = os.environ.get("BU_BROWSER_ID")
@@ -72,7 +91,7 @@ BROWSER_KIND = "cloud" if REMOTE_ID else ("cdp" if (os.environ.get("BU_CDP_WS") 
 
 
 def log(msg):
-    open(LOG, "a").write(f"{msg}\n")
+    open(LOG, "a", encoding="utf-8", errors="replace").write(f"{msg}\n")
 
 
 async def _silent(coro):
@@ -93,7 +112,7 @@ def _ws_from_devtools_active_port(http_url: str) -> str | None:
         host = f"[{host}]"
     for base in PROFILES:
         try:
-            active = (base / "DevToolsActivePort").read_text().splitlines()
+            active = (base / "DevToolsActivePort").read_text(encoding="utf-8", errors="replace").splitlines()
         except (FileNotFoundError, NotADirectoryError):
             continue
         port = active[0].strip() if active else ""
@@ -126,12 +145,15 @@ def get_ws_url():
             except Exception as e:
                 last_err = e
                 time.sleep(1)
-        raise RuntimeError(f"BU_CDP_URL={url} unreachable after 30s: {last_err} -- is the dedicated automation Chrome running?")
+        hint = "is the dedicated automation Chrome running? Launch it with --remote-debugging-port=<port> --user-data-dir=<dedicated dir>"
+        if platform.system() == "Windows":
+            hint += "; on Windows also check that a firewall/antivirus isn't blocking localhost connections"
+        raise RuntimeError(f"BU_CDP_URL={url} unreachable after 30s: {last_err} -- {hint}")
     deadline = time.time() + 30
     while time.time() < deadline:
         for base in PROFILES:
             try:
-                active = (base / "DevToolsActivePort").read_text().splitlines()
+                active = (base / "DevToolsActivePort").read_text(encoding="utf-8", errors="replace").splitlines()
             except (FileNotFoundError, NotADirectoryError):
                 continue
             port = active[0].strip() if active else ""

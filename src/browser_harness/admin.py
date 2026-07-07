@@ -114,7 +114,7 @@ def _load_env():
 
 
 def _load_env_file(p):
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -134,8 +134,8 @@ DOCTOR_TEXT_LIMIT = 140
 
 def _log_tail(name):
     try:
-        return ipc.log_path(name or NAME).read_text().strip().splitlines()[-1]
-    except (FileNotFoundError, IndexError):
+        return ipc.log_path(name or NAME).read_text(encoding="utf-8", errors="replace").strip().splitlines()[-1]
+    except (FileNotFoundError, IndexError, OSError):
         return None
 
 
@@ -345,10 +345,16 @@ def ensure_daemon(wait=60.0, name=None, env=None):
     local = _is_local_chrome_mode(env)
     for attempt in (0, 1):
         e = {**os.environ, **({"BU_NAME": name} if name else {}), **(env or {})}
+        try:
+            stderr_sink = open(ipc.log_path(name or NAME), "ab")
+        except OSError:
+            stderr_sink = subprocess.DEVNULL
         p = subprocess.Popen(
             [sys.executable, "-m", "browser_harness.daemon"],
-            env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **ipc.spawn_kwargs(),
+            env=e, stdout=subprocess.DEVNULL, stderr=stderr_sink, **ipc.spawn_kwargs(),
         )
+        if stderr_sink is not subprocess.DEVNULL:
+            stderr_sink.close()
         deadline = time.time() + wait
         while time.time() < deadline:
             if daemon_alive(name): return
@@ -588,7 +594,7 @@ def list_local_profiles():
     import json, shutil, subprocess
     if not shutil.which("profile-use"):
         raise RuntimeError("profile-use not installed -- curl -fsSL https://browser-use.com/profile.sh | sh")
-    return json.loads(subprocess.check_output(["profile-use", "list", "--json"], text=True))
+    return json.loads(subprocess.check_output(["profile-use", "list", "--json"], text=True, encoding="utf-8", errors="replace"))
 
 
 def sync_local_profile(profile_name, browser=None, cloud_profile_id=None,
@@ -623,7 +629,7 @@ def sync_local_profile(profile_name, browser=None, cloud_profile_id=None,
         cmd += ["--domain", d]
     for d in exclude_domains or []:
         cmd += ["--exclude-domain", d]
-    r = subprocess.run(cmd, text=True, capture_output=True, env={**os.environ, "BROWSER_USE_API_KEY": key})
+    r = subprocess.run(cmd, text=True, encoding="utf-8", errors="replace", capture_output=True, env={**os.environ, "BROWSER_USE_API_KEY": key})
     sys.stdout.write(r.stdout)
     sys.stderr.write(r.stderr)
     if r.returncode != 0:
@@ -667,8 +673,8 @@ def _install_mode():
 
 def _cache_read():
     try:
-        return json.loads(VERSION_CACHE.read_text())
-    except (FileNotFoundError, ValueError):
+        return json.loads(VERSION_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return {}
 
 
@@ -742,10 +748,10 @@ def _chrome_running():
     system = platform.system()
     try:
         if system == "Windows":
-            out = subprocess.check_output(["tasklist"], text=True, timeout=5)
+            out = subprocess.check_output(["tasklist"], text=True, errors="replace", timeout=5)
             names = ("chrome.exe", "msedge.exe", "helium.exe")
         else:
-            out = subprocess.check_output(["ps", "-A", "-o", "comm="], text=True, timeout=5)
+            out = subprocess.check_output(["ps", "-A", "-o", "comm="], text=True, errors="replace", timeout=5)
             names = ("Google Chrome", "chrome", "chromium", "Microsoft Edge", "msedge", "helium")
         return any(n.lower() in out.lower() for n in names)
     except Exception:
