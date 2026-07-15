@@ -18,9 +18,14 @@ per action with `helper`, click `x`/`y`, the focused-input `box`, typed `text`,
 - **Hook in 2 seconds.** Title card over the first beat, then straight into
   action. Cut everything that doesn't advance the story — loads, waits,
   retries, and "result" holds (the next beat's frame already shows the result).
-- **Zoom on intent.** Every click gets a camera punch-in on the click point
-  (`zoom: {x, y, scale: 1.6-1.9}`); every typed field gets a punch-in on its
-  `box`. Pull wide (`zoom` omitted) on navigations and reveals.
+- **Zoom is emphasis — ration it.** 2–4 zooms per video: the opener, the first
+  action of a repeated pattern, and the error/payoff that needs reading. Wide
+  and still is the default; the oversized typing overlay makes typed text
+  readable without a punch-in.
+- **Frame the reaction, not just the click.** Pages respond somewhere else —
+  a cart flyout, a toast, a counter. The zoom must contain the click point AND
+  where the `after` frame changes; check the after frame before choosing the
+  focus. If both can't fit in one shot, stay wide.
 - **Captions carry the narrative.** Short, present tense, personality over
   literalism: "Plot twist: the cart wasn't empty" beats "Deleting item 2 of 3".
   One idea per caption. Not every beat needs one.
