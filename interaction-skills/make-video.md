@@ -1,9 +1,8 @@
 # Making a video from a recording
 
-Turn a session recording (see `start_recording()` / `stop_recording()`) into a
-short, engaging, Screen-Studio-style video. You are the editor: you read the
-trace, decide the story, write the composition, watch your own cut, and
-iterate. The template renders it; taste comes from you.
+Turn a session recording into a short, engaging, Screen-Studio-style video.
+You are the editor: read the trace, decide the story, write the composition,
+watch your own cut, iterate.
 
 A recording is a folder of numbered JPEG frames plus `events.jsonl` — one line
 per action with `helper`, click `x`/`y`, the focused-input `box`, typed `text`,
@@ -11,10 +10,9 @@ per action with `helper`, click `x`/`y`, the focused-input `box`, typed `text`,
 
 ## Editor's brief
 
-- **As short as possible, no shorter.** Omit `dur` — the template computes the
-  readability floor per beat: `max(action minimum, 0.45 + 0.28 × caption words)`
-  (~3.5 words/sec + recognition time). Only set `dur` to go *longer* (payoff
-  shots). A 4-minute session should land around 20s.
+- **As short as possible, no shorter.** Omit `dur` — the template computes a
+  readability floor per beat (~3.5 words/sec of caption). Only set `dur` to go
+  *longer* (payoff shots). A 4-minute session should land around 20s.
 - **Hook in 2 seconds.** Title card over the first beat, then straight into
   action. Cut everything that doesn't advance the story — loads, waits,
   retries, and "result" holds (the next beat's frame already shows the result).
@@ -65,9 +63,9 @@ beats: [...]}` — schema documented at the top of the template. Timing rules:
 
 1. Read `events.jsonl`. Sketch the story: hook → beats → payoff.
 2. Copy the template into the recording dir and write the composition:
-   `cp interaction-skills/video-template.html <rec>/video.html`, then write
-   `<rec>/composition.js`. (Template source:
-   https://github.com/browser-use/browser-harness/blob/main/interaction-skills/video-template.html)
+   `cp interaction-skills/video-template.html <rec>/video.html` (no local
+   clone: fetch `video-template.html` from this file's GitHub directory),
+   then write `<rec>/composition.js`.
 3. Serve the dir over HTTP — canvas capture fails on `file://` (tainted):
    `cd <rec> && python3 -m http.server 8123 &`
 4. Open `http://127.0.0.1:8123/video.html` in a tab and **review your cut**:
@@ -76,15 +74,13 @@ beats: [...]}` — schema documented at the top of the template. Timing rules:
    Fix composition.js, reload, re-check. At least one full pass.
 5. Export: `js("exportVideo('my-video.webm')")` — it plays once in realtime
    (a 30s video takes 30s) and downloads to Chrome's download dir. Keep the
-   tab focused and wait ~duration+2s, then confirm via
-   `js("window.__exported")`. Move the file where the user wants it.
+   tab focused until it finishes (background tabs stall rendering), wait
+   ~duration+2s, confirm via `js("window.__exported")`, then move the file
+   where the user wants it.
 6. Kill the http server. Tell the user the path.
 
 ## Gotchas
 
-- `file://` pages taint the canvas → export throws SecurityError. Always http.
-- Background tabs throttle `requestAnimationFrame` → export stalls. Keep the
-  compositor tab active until export resolves.
 - Frames are captured at devicePixelRatio; the template maps CSS px itself —
   never pre-scale coordinates.
 - MediaRecorder outputs webm (vp9). If the user wants mp4:
