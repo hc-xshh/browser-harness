@@ -1,85 +1,133 @@
 # Making a video from a recording
 
-Turn a session recording into a short, engaging, Screen-Studio-style video.
-You are the editor: read the trace, decide the story, write the composition,
-watch your own cut, iterate.
+Turn a browser-harness session into a clear, privacy-safe explanatory video.
+The numbered JPEGs and `events.jsonl` are source evidence; `edit-brief.json`
+is the editorial story; the compiler and `video-template.html` are the shared
+house style.
 
-A recording is a folder of numbered JPEG frames + `events.jsonl` — per action:
-`helper`, click `x`/`y`, focused-input `box`, typed `text`, `url`, viewport
-`w`/`h`, and the post-action `frame` filename.
+Create a video only when the user asks or naturally nudges toward seeing the
+work. Significant browser work alone is not consent.
 
-## Editor's brief
+For the complete reusable workflow and blocking audit, read
+`skills/browser-harness-video/SKILL.md`.
 
-- **Short as possible, no shorter.** Omit `dur` — the template computes a
-  readability floor (~3.5 caption words/sec); set it only to go *longer*
-  (payoff shots). A 4-minute session ≈ 20s.
-- **Hook in 2s.** Title card over the first beat, then straight into action.
-  Cut loads, waits, retries, and "result" holds — the next beat's frame
-  already shows the result.
-- **Ration zooms: 2–4 per video** — opener, first action of a repeated
-  pattern, the error/payoff that needs reading. Wide and still is the
-  default; the oversized typing overlay keeps typed text readable unzoomed.
-- **Frame the reaction, not just the click.** Pages respond elsewhere (cart
-  flyout, toast, counter): the zoom must contain the click point AND where
-  the `after` frame changes — check the after frame before choosing focus.
-  If both don't fit, stay wide.
-- **Captions carry the narrative.** Short, present tense, personality over
-  literalism ("Plot twist: the cart wasn't empty" > "Deleting item 2 of 3").
-  One idea each; not every beat needs one.
-- **Mistakes are content — make them unmissable.** `error: true` gives a red
-  vignette, ⚠ ERROR chip, shake, red caption pill. Zoom on the *evidence*
-  (the wrong text, the failed state) so it's readable; caption it honestly.
-  Keep one if you have one.
-- **Camera calm beats camera clever.** Consecutive actions in one region get
-  the SAME zoom target (zero motion between them). One thing moves at a time
-  — the template sequences camera → cursor → click → result for you.
-- **End on the payoff + flex**: final state wide, then `outro`/`outroSub`
-  ("Done in 4m 28s").
-- **Hide secrets before anything else.** Scan every frame you use for
-  tokens, API keys, account/tenant IDs, emails, the signed-in identity chip
-  — list them in `redact: {"0010.jpg": [{x, y, w, h}]}` (page px, per frame)
-  and the template pixelates them wherever that frame shows. Zooming into a
-  secret is the worst leak: check your zoom targets first.
+Discover the recording with `browser-harness recordings --latest` (or
+`./browser-harness recordings --latest` in a development checkout). Never
+guess the workspace path, infer recording state from an unset environment
+variable, reenact the task, or build a synthetic page solely for the video.
 
-## Beats
+## Story
 
-`window.COMPOSITION = {title, outro, outroSub, viewport, beats: [...]}` —
-schema at the top of the template. `bg` sets the backdrop: one color = flat
-(default warm off-white), `[c1, c2]` = gradient; overlays/cards auto-adapt.
+- Start with the task plus a 2–5 step plan and leave it up long enough for a
+  quick, structured scan.
+- Use the pause-friendly 380 WPM scan target. A normal cut has a hard 22-second
+  budget; the compiler grants extra time only for genuinely larger stories.
+- Build one causal chain: intent → action → visible result.
+- Keep narration to one thought and usually 3–7 words. Set it only when the
+  thought changes and let it persist across two or three screenshots.
+- Put detailed reasoning on a still `explanation` card. A useful wrong turn
+  should say what was observed, why it happened, and what changes next.
+- Use exactly `Observed`, `Mistake`, `Correction` for a wrong turn. Author them
+  in that causal order; the renderer reveals them sequentially.
+- Remove waits, retries, and motion that do not change the viewer's model.
+- End with an `outcome` card listing what was actually achieved and verified.
 
-- **Click beat**: the frame *before* the click (previous event's `frame`) +
-  `cursor: {x, y}`, `click: true`, `zoom` on that point. The *next* beat
-  shows the result frame — the reaction shot.
-- **Typing beat**: pre-typing frame + `type: {box, text}` verbatim from the
-  event; the template animates the text into the box.
-- **Navigation beat**: own frame, wide, with `url` (omnibox text) + `tab`
-  (tab title) — the template draws a realistic Chrome window.
-- **Hold beat** (`hold: true`): freezes the previous camera on a result frame.
-- Coordinates are page CSS px — use event `x`/`y`/`box` verbatim; set
-  `viewport: {w, h}` from the events once. Never pre-scale for
-  devicePixelRatio: frames are captured at dpr, the template maps CSS px.
-- Telemetry is automatic (`STEP k/N` + call chips, click crosshairs); `label`
-  overrides (e.g. `'goto("site.com")'`). Set `t` = event `ts` − session start
-  to drive the fast session clock — it sells the time compression.
+The main cut is for first-time comprehension. The raw trace remains the
+forensic artifact for debugging.
+
+## Motion
+
+- Cursor and typing beats auto-frame. Consecutive close actions stay in one
+  zoom band and pan gently between targets.
+- Use `wide: true` for deliberate context shots, not between every action.
+- Use `cameraCut: true` when a distant target would require a painful pan.
+- Pair a click with `after`; the result appears within about 65ms. Add
+  `afterRoute` when the semantic location changes with it.
+- The cursor remains screen-sized and grows in wide shots.
+- Keep every click inside the renderer's safe area. Edge clicks automatically
+  pull the camera back so captions and telemetry cannot cover the action.
+- `error: true` changes labels and captions, but stays calm. Add
+  `errorMotion: true` only when a shake genuinely clarifies the failure.
+- Reduced-motion mode removes camera travel and shakes.
+
+## Privacy
+
+- On private account/admin surfaces, treat emails, passwords, tokens,
+  tenant/object IDs, customer or tenant domains, raw SPA URLs, signed-in
+  identity chips, and unrelated people as sensitive by default.
+- Keep public source material—authors, post text, and link domains—when it is
+  evidence for the task. Do not redact it solely because it is a username or
+  domain.
+- Use a short semantic `route`, never a raw trace URL.
+- Add page-coordinate rectangles under `redact`. The renderer uses opaque
+  masks with padding; blur and pixelation are not safe enough for secrets.
+- Match masks to the surrounding surface when possible. `privacy.mask` sets a
+  quiet default; a rectangle can override `fill`, `stroke`, `radius`, and `pad`.
+  Colors must be opaque six-digit hex values.
+- Redaction remains active across both `frame` and `after` states.
+- List a frame in `privacy.reviewedFrames` only after inspecting the rendered,
+  masked image at full resolution. The renderer blocks export otherwise.
+- Sensitive synthetic typing must set `type.redact: true`.
+
+## Authenticity
+
+- Preserve raw captured frames, cursor motion, clicks, and typing as evidence.
+- Keep subtitles and chapter progress outside the captured app surface. Do not
+  paint explanatory labels over raw frames.
+- Use the native system font and `frameStyle: "native"`. Never invent a URL,
+  tab title, browser state, timestamp, user value, or successful result.
+- Synthetic browser chrome is blocked unless the composition explicitly sets
+  `authenticity.allowSyntheticChrome: true`.
+- Let narration persist while screenshots advance when one thought spans
+  multiple actions; text and frames do not need to change together.
+
+## Edit brief
+
+Read `skills/browser-harness-video/references/edit-brief.md`. Choose the causal
+story, one-based recording events, semantic routes, narration, verified
+outcomes, and page-coordinate redactions. Do not choose durations, camera
+coordinates, zoom, motion, typography, browser chrome, cursor size, or colors.
+The compiler rejects those fields so every new session inherits the v9 cut.
 
 ## Workflow
 
-1. Read `events.jsonl`; sketch hook → beats → payoff.
-2. `cp interaction-skills/video-template.html <rec>/video.html` (no local
-   clone: fetch it from this file's GitHub directory); write
-   `<rec>/composition.js`.
-3. `cd <rec> && python3 -m http.server 8123 &` — must be http, canvas
-   capture fails on `file://` (tainted).
-4. Open `http://127.0.0.1:8123/video.html` and **review your cut**: scrub
-   every beat boundary with `js("seek(4.2)")` + `capture_screenshot()`.
-   Caption overlapping the action? Zoom too tight? Silly cursor path? Fix
-   composition.js, reload, re-check — at least one full pass.
-5. `js("exportVideo('my-video.webm')")` — plays once in realtime (30s video
-   takes 30s), downloads to Chrome's download dir. Keep the tab focused
-   (background tabs stall rendering), wait ~duration+2s, confirm
-   `js("window.__exported")`, move the file where the user wants it.
-6. Kill the server; tell the user the path.
+From the repository root:
 
-Missing frame → that beat renders black; the HUD bottom-left shows
-playhead/beat. mp4 wanted? `ffmpeg -i video.webm -c:v libx264 -crf 20
-video.mp4` (webm/vp9 is the native output).
+```bash
+uv run skills/browser-harness-video/scripts/init_video.py <recording-dir>
+```
+
+Read `recording-summary.json`, inspect the source frames, and write
+`edit-brief.json`. Compile and audit it:
+
+```bash
+uv run skills/browser-harness-video/scripts/compose_video.py <recording-dir>
+uv run skills/browser-harness-video/scripts/audit_video.py <recording-dir>
+```
+
+Never hand-edit generated `composition.js`; fix the brief or the shared
+compiler instead.
+
+Inspect `privacy-contact-sheet.jpg` and every masked image in
+`.privacy-review/` locally. Never share those review artifacts. Fix every
+error before renderer review.
+
+Generate the normal-motion, reduced-motion, and exact-click review sheets:
+
+```bash
+uv run skills/browser-harness-video/scripts/render_video.py review <recording-dir>
+```
+
+The script opens `video.html` through the local harness with recording disabled,
+runs `window.videoPreflight()` and `window.clickVisibility()`, and captures every
+required state. Inspect every generated `renderer-*-contact-sheet.jpg`.
+
+Only after inspecting those sheets, export the verified MP4:
+
+```bash
+uv run skills/browser-harness-video/scripts/render_video.py export <recording-dir> --reviewed
+```
+
+The script exports in real time, converts to H.264, fully decodes the result,
+checks its duration, and creates `renderer-final-contact-sheet.jpg`. Inspect
+that final sheet before sharing `video.mp4`.

@@ -11,8 +11,9 @@ from browser_harness import recorder
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("BH_AGENT_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("BH_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("BU_NAME", "testrec")
-    monkeypatch.setenv("BH_RECORD", "0")  # opt out of auto-record; tests drive it explicitly
+    monkeypatch.delenv("BH_RECORD", raising=False)
     monkeypatch.setattr(recorder, "_SETTLE_SECONDS", 0)
     return tmp_path
 
@@ -72,8 +73,18 @@ def test_observe_is_noop_when_opted_out(workspace, monkeypatch):
     assert not (workspace / "recordings").exists() or not list((workspace / "recordings").glob("*/events.jsonl"))
 
 
-def test_observe_auto_records_by_default(workspace, monkeypatch, fake_png):
+def test_observe_does_not_auto_record_by_default(workspace, monkeypatch, fake_png):
     monkeypatch.delenv("BH_RECORD", raising=False)
+    js_p, cdp_p = _record(fake_png)
+    with js_p, cdp_p:
+        recorder.observe("click_at_xy", (640, 412), {}, 0.1)
+        recorder.observe("goto_url", ("https://a.example",), {})
+    assert not list((workspace / "recordings").glob("session-*"))
+
+
+def test_observe_auto_records_when_enabled(workspace, monkeypatch, fake_png):
+    monkeypatch.delenv("BH_RECORD", raising=False)
+    recorder.set_auto_recording(True)
     js_p, cdp_p = _record(fake_png)
     with js_p, cdp_p:
         recorder.observe("click_at_xy", (640, 412), {}, 0.1)
@@ -83,6 +94,49 @@ def test_observe_auto_records_by_default(workspace, monkeypatch, fake_png):
     events = _events(recs[0])
     assert [e["helper"] for e in events] == ["click_at_xy", "goto_url"]
     assert json.loads((recs[0] / "meta.json").read_text())["auto"] is True
+
+
+def test_disabling_preference_stops_active_auto_recording(workspace, fake_png):
+    recorder.set_auto_recording(True)
+    js_p, cdp_p = _record(fake_png)
+    with js_p, cdp_p:
+        recorder.observe("click_at_xy", (1, 2), {})
+        rec = recorder.recording_dir()
+        recorder.set_auto_recording(False)
+        recorder.observe("goto_url", ("https://later.example",), {})
+    assert recorder.recording_dir() is None
+    assert [e["helper"] for e in _events(rec)] == ["click_at_xy"]
+
+
+def test_environment_override_wins_over_saved_preference(workspace, monkeypatch):
+    recorder.set_auto_recording(True)
+    monkeypatch.setenv("BH_RECORD", "0")
+    assert recorder.auto_recording_setting() == (False, "BH_RECORD")
+
+
+def test_bh_record_zero_suppresses_an_existing_auto_recording(workspace, monkeypatch, fake_png):
+    monkeypatch.setenv("BH_RECORD", "1")
+    js_p, cdp_p = _record(fake_png)
+    with js_p, cdp_p:
+        recorder.observe("click_at_xy", (1, 2), {})
+        rec = recorder.recording_dir()
+        monkeypatch.setenv("BH_RECORD", "0")
+        recorder.observe("goto_url", ("https://editor.example",), {})
+    assert [e["helper"] for e in _events(rec)] == ["click_at_xy"]
+
+
+def test_latest_recording_returns_newest_evidence(workspace):
+    older = workspace / "recordings" / "older"
+    newer = workspace / "recordings" / "newer"
+    older.mkdir(parents=True)
+    newer.mkdir(parents=True)
+    (older / "events.jsonl").write_text("{}\n")
+    (newer / "events.jsonl").write_text("{}\n")
+    os.utime(older / "events.jsonl", (1, 1))
+    os.utime(newer / "events.jsonl", (2, 2))
+
+    assert recorder.recordings() == [str(newer), str(older)]
+    assert recorder.latest_recording() == str(newer)
 
 
 def test_auto_record_accumulates_across_calls(workspace, monkeypatch, fake_png):

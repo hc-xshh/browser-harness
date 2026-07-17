@@ -40,12 +40,26 @@ print(page_info())
 PY
 ```
 
-If that prints page info, you're done. If not, run `browser-harness --doctor` and follow the connection cases. The two connection methods:
+If that prints page info, configure recording consent below, then you're done.
+If not, run `browser-harness --doctor` and follow the connection cases. The two connection methods:
 
 - **Way 1 (real browser):** open Chrome normally, then open `chrome://inspect/#remote-debugging` and tick "Allow remote debugging for this browser instance". On Chrome 144+, click Allow on the first-attach popup. Inherits your logins/extensions — best when the agent acts in your everyday browser.
 - **Way 2 (isolated profile, no popups):** launch Chrome with `--remote-debugging-port=9222 --user-data-dir=<non-default path>`, then set `BU_CDP_URL=http://127.0.0.1:9222`. Best for unattended automation.
 
 If the quick path fails after `--doctor`, inspect `src/browser_harness/admin.py`, `src/browser_harness/daemon.py`, and `src/browser_harness/_ipc.py`.
+
+## Recording consent
+
+Run `browser-harness recordings`. If it reports `(default)`, ask the user once:
+
+> Enable local browser recordings? This saves screenshots and action traces on
+> this machine, which may include sensitive page content, so you can later ask
+> “show me what you did” or request a video. Videos are never generated
+> automatically. [y/N]
+
+Default to no. Run `browser-harness recordings enable` only after yes; otherwise
+run `browser-harness recordings disable`. Preserve an existing `(config)` or
+`(BH_RECORD)` preference during upgrades instead of asking again.
 
 ## Keeping current
 

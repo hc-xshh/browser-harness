@@ -13,10 +13,9 @@ active state across CLI invocations (the daemon is untouched). run.py calls
 observe() after every traced helper; only helpers in ACTIONS produce a
 frame. Recording failures are swallowed — they must never break the run.
 
-By default every session is auto-recorded without an explicit
-start_recording(): recordings are named session-<timestamp> and roll over
-to a fresh one after BH_RECORD_IDLE seconds (default 180) without actions.
-BH_RECORD=0 turns auto-recording off.
+Automatic recording is an opt-in preference stored under the browser-harness
+config directory. BH_RECORD=1/0 overrides it for one process. Explicit
+start_recording() always works unless BH_RECORD=0 is set.
 
 Turning a recording into a video is the make-video skill's job:
 interaction-skills/make-video.md.
@@ -72,6 +71,25 @@ def _recordings_root():
     return paths.workspace_dir() / "recordings"
 
 
+def _config_path():
+    return paths.config_dir() / "recording.json"
+
+
+def _load_config():
+    try:
+        data = json.loads(_config_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _env_override():
+    raw = os.environ.get("BH_RECORD")
+    if raw is None:
+        return None
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
 def _marker():
     return _recordings_root() / f".active-{os.environ.get('BU_NAME', 'default')}"
 
@@ -114,11 +132,66 @@ def recording_dir():
     return d if Path(d).is_dir() else None
 
 
+def recordings():
+    """Recording directories, newest first."""
+    root = _recordings_root()
+    if not root.exists():
+        return []
+
+    def modified(path):
+        evidence = path / "events.jsonl"
+        return evidence.stat().st_mtime if evidence.exists() else path.stat().st_mtime
+
+    found = [p for p in root.iterdir()
+             if p.is_dir() and ((p / "meta.json").exists() or (p / "events.jsonl").exists())]
+    return [str(p) for p in sorted(found, key=modified, reverse=True)]
+
+
+def latest_recording():
+    """Newest recording directory, or None."""
+    found = recordings()
+    return found[0] if found else None
+
+
+def auto_recording_setting():
+    """Return (enabled, source) for the automatic recording preference."""
+    override = _env_override()
+    if override is not None:
+        return override, "BH_RECORD"
+    config = _load_config()
+    if isinstance(config.get("enabled"), bool):
+        return config["enabled"], "config"
+    return False, "default"
+
+
 def _auto_enabled():
-    """Auto-record every session unless BH_RECORD is set falsy. On by default —
-    recording is cheap (one jpg per action) and making a video stays a separate,
-    deliberate step; BH_RECORD=0 opts out entirely."""
-    return os.environ.get("BH_RECORD", "1").strip().lower() not in ("0", "false", "no", "off")
+    return auto_recording_setting()[0]
+
+
+def auto_recording_enabled():
+    """Whether automatic recording is enabled for this process."""
+    return _auto_enabled()
+
+
+def set_auto_recording(enabled):
+    """Persist the automatic recording preference. BH_RECORD still overrides it."""
+    path = _config_path()
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"enabled": bool(enabled)}) + "\n", encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    if not enabled:
+        d = recording_dir()
+        if d is not None and _is_auto_recording(d):
+            _marker().unlink(missing_ok=True)
+
+
+def _is_auto_recording(d):
+    try:
+        return json.loads((Path(d) / "meta.json").read_text(encoding="utf-8")).get("auto") is True
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return False
 
 
 # Auto-recordings roll over after this idle gap — a pause since the last action
@@ -148,7 +221,7 @@ def _auto_start():
 def _auto_is_stale(d):
     """True if the active auto-recording has gone idle past the rollover gap."""
     try:
-        if not json.loads((Path(d) / "meta.json").read_text()).get("auto"):
+        if not _is_auto_recording(d):
             return False  # explicit start_recording() never auto-rolls
         frames = list(Path(d).glob("*.jpg"))
         if not frames:
@@ -164,7 +237,12 @@ def observe(name, args, kwargs, duration=None):
     if name not in ACTIONS:
         return
     try:
+        if _env_override() is False:
+            return
         d = recording_dir()
+        if d is not None and _is_auto_recording(d) and not _auto_enabled():
+            _marker().unlink(missing_ok=True)
+            d = None
         if d is not None and _auto_is_stale(d):
             _marker().unlink(missing_ok=True)
             d = None
