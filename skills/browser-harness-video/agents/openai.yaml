@@ -1,4 +1,0 @@
-interface:
-  display_name: "Browser Harness Video"
-  short_description: "Create trustworthy browser session videos"
-  default_prompt: "Use $browser-harness-video to turn this recording into a trustworthy, privacy-safe session video."

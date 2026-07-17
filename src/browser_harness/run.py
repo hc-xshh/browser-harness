@@ -56,6 +56,9 @@ Commands:
   browser-harness recordings --latest   print the newest recording directory
   browser-harness recordings enable   save browser actions locally by default
   browser-harness recordings disable  stop saving browser actions by default
+  browser-harness video init <recording>      prepare a recording for editing
+  browser-harness video review <recording>    compile and review the video
+  browser-harness video export <recording> --reviewed   export a verified MP4
   browser-harness telemetry status    show anonymous telemetry opt-out state
   browser-harness --update [-y]    pull the latest version (agents: pass -y)
   browser-harness --reload         stop the daemon so next call picks up code changes
@@ -119,7 +122,7 @@ def _telemetry_command(args):
         return "reload"
     if first == "--debug-clicks":
         return "debug-clicks"
-    if first in {"auth", "skill", "recordings", "telemetry"}:
+    if first in {"auth", "skill", "recordings", "telemetry", "video"}:
         return first
     return "usage"
 
@@ -339,6 +342,10 @@ def _run(args):
         recent = recorder.recordings()
         print(f"latest: {recent[0] if recent else 'none'}")
         return
+    if args and args[0] == "video":
+        from . import video
+
+        sys.exit(video.run_cli(args[1:]))
     if args and args[0] == "--update":
         yes = any(a in {"-y", "--yes"} for a in args[1:])
         sys.exit(run_update(yes=yes))

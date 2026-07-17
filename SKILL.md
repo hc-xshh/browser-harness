@@ -95,8 +95,7 @@ Cloud profile cookie sync reference: https://github.com/browser-use/browser-harn
 
 ## Recordings and Videos
 
-Fresh installs do not record browser actions. Users may enable local background
-traces during installation or later:
+Fresh installs do not record. Users can enable local background traces:
 
 ```bash
 browser-harness recordings enable
@@ -104,54 +103,24 @@ browser-harness recordings disable
 browser-harness recordings
 ```
 
-Background traces save screenshots and action metadata locally so a later
-“show me what you did” can work; they never trigger video generation by
-themselves. `BH_RECORD=1` or `BH_RECORD=0` overrides the saved preference for
-one process.
+`BH_RECORD=1` or `BH_RECORD=0` overrides the preference for one process. Any
+natural nudge to “record,” “show,” “demo,” or “make a video” opts in that task;
+significant work alone does not.
 
-Treat any user nudge toward showing the work as task-level opt-in: “record
-this,” “show me what you did,” “make a video,” “screen recording,” “demo it,”
-“walk me through it,” “show the steps,” or similar language. Do not require an
-exact keyword. Significant work alone is not consent.
-
-When the nudge arrives before browser work and background traces are off, call
-`start_recording(name, title=...)` before the first action and
-`stop_recording()` after the verified end state. This records only that task
-without changing the saved preference. Retain the exact directory returned by
-`start_recording()` and pass that path through post-production; never replace
-it with `recordings --latest`. Render a video when the user asks to see, watch,
-or share the work; otherwise return the requested raw recording.
-
-For a post-task request, find existing evidence through the CLI, never by
-guessing the workspace path or inspecting `BH_RECORD` yourself:
+Before browser work, call `start_recording(name, title=...)`, retain its exact
+returned directory, and call `stop_recording()` after verifying the result.
+Never replace that path with `recordings --latest`. For a request made after
+the task, use:
 
 ```bash
 browser-harness recordings --latest
 ```
 
-In a development checkout, use `./browser-harness` for both commands.
-
-Use it only when its timestamps and pages match the just-completed task. If no
-matching trace exists, say it was not captured. Never replay a completed task
-merely to manufacture footage.
-
-When a video was requested and sub-agents are available, delegate only
-post-production after the final browser action. Give the video worker the
-original task and exact recording directory; keep the primary agent validating
-and handing off the actual task result. The video worker must use the existing
-frames, set `BH_RECORD=0` while operating the editor, and never reenact or
-modify the live task. If delegation is unavailable, make the video in the
-primary thread.
-
-Use a bounded handoff such as: “Read `skills/browser-harness-video/SKILL.md`.
-Original task: … Recording: … Produce and verify the MP4 using only captured
-artifacts; do not browse, reenact, or change the completed task.”
-
-To edit a recording into a short, engaging video, read
-`skills/browser-harness-video/SKILL.md` in a checkout, or the canonical guide
-linked from https://github.com/browser-use/browser-harness/blob/main/interaction-skills/make-video.md.
-It blocks inauthentic, unreadable, stale, or unsafe exports. Do not improvise
-a different video template.
+Use it only if timestamps and pages match; otherwise say the work was not
+captured. Never reenact a completed task. For a video, follow
+[make-video.md](https://github.com/browser-use/browser-harness/blob/main/interaction-skills/make-video.md).
+If sub-agents are available, they may handle post-production from the exact
+recording path while the main agent returns the task result.
 
 ## Interaction Skills
 

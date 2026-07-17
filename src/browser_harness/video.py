@@ -1,20 +1,58 @@
 #!/usr/bin/env python3
-"""Compile editorial choices into the deterministic browser video house style."""
+"""Initialize, compile, review, and export browser-harness recordings."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
-from video_policy import OPAQUE_HEX, ROUTE_UNSAFE, VideoPolicyError, load_json as policy_load_json, used_frames
-
-
-SKILL = Path(__file__).resolve().parents[1]
-STYLE_PATH = SKILL / "assets" / "house-style.json"
+TEMPLATE = Path(__file__).with_name("video-template.html")
+SOURCE_MANIFEST = "video-source.json"
+COMPOSITION_PREFIX = "window.COMPOSITION ="
+SENSITIVE = re.compile(
+    r"@|onmicrosoft\.com|(?:tenant|user|object)[_-]?id|"
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+ROUTE_UNSAFE = re.compile(
+    r"@|[?#]|://|onmicrosoft|(?:tenant|user|object)[_-]?id|"
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+OPAQUE_HEX = re.compile(r"^#[0-9a-f]{6}$", re.IGNORECASE)
+HOUSE_STYLE = {
+    "version": 1,
+    "frameStyle": "native",
+    "readingWpm": 380,
+    "background": ["#efece4", "#dce7e7"],
+    "cursorStart": {"x": 700, "y": 280},
+    "pacing": {
+        "captionBaseSeconds": 0.35,
+        "captionSecondsPerWord": 0.2,
+        "rawToCardHoldSeconds": 0.55,
+        "baseDurationBudget": 22,
+        "extraActionSeconds": 1.25,
+        "extraExplanationSeconds": 3,
+        "maximumDurationBudget": 32,
+    },
+    "motion": {
+        "autoFollow": True,
+        "autoZoom": 1.7,
+        "cursorDuration": 0.48,
+        "zoomDuration": 0.42,
+        "panDuration": 0.55,
+        "wideScale": 0.78,
+        "reactionLag": 0.025,
+        "reactionFade": 0.04,
+    },
+    "privacy": {"pad": 10, "mask": {"fill": "#ffffff", "stroke": False, "radius": 0}},
+}
 ACTION_KEYS = {
     "event",
     "frameEvent",
@@ -60,9 +98,78 @@ class BriefError(ValueError):
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
-        return policy_load_json(path)
-    except VideoPolicyError as exc:
-        raise BriefError(str(exc)) from exc
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BriefError(f"cannot read {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise BriefError(f"{path} must contain a JSON object")
+    return value
+
+
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_composition(path: Path) -> dict[str, Any]:
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise BriefError(f"cannot read {path}: {exc}") from exc
+    if not text.startswith(COMPOSITION_PREFIX) or not text.endswith(";"):
+        raise BriefError(f"{path} is not a generated composition")
+    try:
+        value = json.loads(text[len(COMPOSITION_PREFIX) : -1].strip())
+    except json.JSONDecodeError as exc:
+        raise BriefError(f"cannot read {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise BriefError(f"{path} must set a JSON object")
+    return value
+
+
+def used_frames(composition: dict[str, Any]) -> list[str]:
+    frames: list[str] = []
+    for beat in composition.get("beats") or []:
+        for key in ("frame", "after"):
+            frame = beat.get(key)
+            if frame and frame not in frames:
+                frames.append(str(frame))
+    return frames
+
+
+def source_files(recording: Path) -> list[Path]:
+    required = [recording / name for name in ("events.jsonl", "meta.json", "recording-summary.json")]
+    frames = sorted(path for path in recording.glob("*.jpg") if path.stem.isdigit())
+    return [path for path in required if path.is_file()] + frames
+
+
+def write_source_manifest(recording: Path) -> dict[str, Any]:
+    meta_path = recording / "meta.json"
+    meta = load_json(meta_path) if meta_path.is_file() else {}
+    files = source_files(recording)
+    manifest = {
+        "recording": recording.name,
+        "started": meta.get("started"),
+        "explicit": meta_path.is_file() and meta.get("auto") is not True,
+        "files": {path.name: file_hash(path) for path in files},
+    }
+    (recording / SOURCE_MANIFEST).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest
+
+
+def verify_source_manifest(recording: Path) -> dict[str, Any]:
+    manifest = load_json(recording / SOURCE_MANIFEST)
+    if manifest.get("recording") != recording.name:
+        raise BriefError("recording directory does not match video-source.json")
+    expected = manifest.get("files")
+    if not isinstance(expected, dict):
+        raise BriefError("video-source.json has no source hashes")
+    paths = source_files(recording)
+    if {path.name for path in paths} != set(expected):
+        raise BriefError("recording source files changed after initialization")
+    for path in paths:
+        if expected.get(path.name) != file_hash(path):
+            raise BriefError(f"recording source changed after initialization: {path.name}")
+    return manifest
 
 
 def reject_unknown(value: dict[str, Any], allowed: set[str], where: str) -> None:
@@ -493,30 +600,110 @@ def load_revealed_text(events_path: Path) -> dict[int, str]:
     return revealed
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("recording", type=Path)
-    parser.add_argument("--brief", default="edit-brief.json")
-    parser.add_argument("--output", default="composition.js")
-    args = parser.parse_args()
-    recording = args.recording.expanduser().resolve()
-    try:
-        summary = load_json(recording / "recording-summary.json")
-        brief = load_json(recording / args.brief)
-        style = load_json(STYLE_PATH)
-        composition = compile_brief(summary, brief, style, load_revealed_text(recording / "events.jsonl"))
-        write_composition(recording / args.output, composition)
-    except BriefError as exc:
-        parser.error(str(exc))
-    print(f"composition: {recording / args.output}")
-    print(f"schema: {composition['schemaVersion']}")
-    print(f"beats: {len(composition['beats'])}")
-    print(
-        "duration: "
-        f"{sum(beat['dur'] for beat in composition['beats']):.1f}s / "
-        f"{composition['durationBudget']:.1f}s budget"
-    )
+def safe_text(event: dict[str, Any]) -> str | None:
+    value = event.get("text")
+    if value is None:
+        return None
+    if event.get("helper") in TYPE_HELPERS:
+        return "<typed text hidden>"
+    value = str(value)
+    if event.get("input") == "password" or SENSITIVE.search(value):
+        return "<sensitive>"
+    return value[:120]
+
+
+def safe_label(value: object) -> str | None:
+    if value is None:
+        return None
+    value = str(value)
+    return "<sensitive>" if SENSITIVE.search(value) else value[:120]
+
+
+def init_recording(recording: Path, require_explicit: bool = False) -> int:
+    events_path = recording / "events.jsonl"
+    if not events_path.is_file():
+        raise BriefError(f"missing {events_path}")
+    meta_path = recording / "meta.json"
+    meta = load_json(meta_path) if meta_path.is_file() else {}
+    if require_explicit and (not meta_path.is_file() or meta.get("auto") is True):
+        raise BriefError("not an explicit recording; use the exact path returned by start_recording()")
+
+    shutil.copy2(TEMPLATE, recording / "video.html")
+    events = []
+    for source_line, line in enumerate(events_path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise BriefError(f"cannot read {events_path}: {exc}") from exc
+        if not raw.get("frame"):
+            continue
+        events.append(
+            {
+                "frame": raw["frame"],
+                "sourceLine": source_line,
+                "helper": raw.get("helper"),
+                "ts": raw.get("ts"),
+                "route": "Browser",
+                "tab": safe_label(raw.get("title")),
+                "viewport": {"w": raw.get("w"), "h": raw.get("h")},
+                "cursor": (
+                    {"x": raw.get("x"), "y": raw.get("y")}
+                    if raw.get("x") is not None and raw.get("y") is not None
+                    else None
+                ),
+                "box": raw.get("box"),
+                "text": safe_text(raw),
+                "textLength": len(str(raw.get("text") or "")),
+                "password": raw.get("input") == "password",
+            }
+        )
+
+    summary = {
+        "recording": recording.name,
+        "title": safe_label(meta.get("title")),
+        "eventCount": len(events),
+        "events": events,
+    }
+    output = recording / "recording-summary.json"
+    output.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    write_source_manifest(recording)
+    print(f"summary: {output}")
+    print(f"next: write {recording / 'edit-brief.json'}, then run browser-harness video review")
     return 0
+
+
+def run_cli(args: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="browser-harness video")
+    sub = parser.add_subparsers(dest="command", required=True)
+    init = sub.add_parser("init", help="prepare a recording for editing")
+    init.add_argument("recording", type=Path)
+    init.add_argument("--require-explicit", action="store_true")
+    review = sub.add_parser("review", help="compile and generate a review sheet")
+    review.add_argument("recording", type=Path)
+    export = sub.add_parser("export", help="export a reviewed MP4")
+    export.add_argument("recording", type=Path)
+    export.add_argument("--output", default="video.mp4")
+    export.add_argument("--reviewed", action="store_true")
+    parsed = parser.parse_args(args)
+    recording = parsed.recording.expanduser().resolve()
+    try:
+        if parsed.command == "init":
+            return init_recording(recording, parsed.require_explicit)
+        from . import video_render
+
+        if parsed.command == "review":
+            return video_render.review(recording)
+        return video_render.export(recording, parsed.output, parsed.reviewed)
+    except (OSError, ValueError, RuntimeError) as exc:
+        parser.error(str(exc))
+
+
+def main() -> int:
+    import sys
+
+    return run_cli(sys.argv[1:])
 
 
 if __name__ == "__main__":

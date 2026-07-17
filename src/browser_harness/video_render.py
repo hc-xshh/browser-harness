@@ -3,13 +3,13 @@
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import json
 import math
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -17,18 +17,16 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-import compose_video
-from video_policy import SOURCE_MANIFEST, file_hash, load_composition as policy_load_composition, used_frames, verify_source_manifest
+from . import video
 
 
-ROOT = Path(__file__).resolve().parents[3]
-TEMPLATE = ROOT / "interaction-skills" / "video-template.html"
+TEMPLATE = Path(__file__).with_name("video-template.html")
 MARKER = "__BH_VIDEO_RESULT__="
 REVIEW_ARTIFACTS = {
     "composition.js",
     "recording-summary.json",
     "edit-brief.json",
-    SOURCE_MANIFEST,
+    video.SOURCE_MANIFEST,
     "video.html",
 }
 OBSOLETE_REVIEW_FILES = {
@@ -41,19 +39,18 @@ OBSOLETE_REVIEW_FILES = {
 
 
 def load_composition(recording: Path) -> dict:
-    return policy_load_composition(recording / "composition.js")
+    return video.load_composition(recording / "composition.js")
 
 
 def compile_recording(recording: Path, write: bool) -> dict:
-    verify_source_manifest(recording)
-    summary = compose_video.load_json(recording / "recording-summary.json")
-    brief = compose_video.load_json(recording / "edit-brief.json")
-    style = compose_video.load_json(compose_video.STYLE_PATH)
-    composition = compose_video.compile_brief(
-        summary, brief, style, compose_video.load_revealed_text(recording / "events.jsonl")
+    video.verify_source_manifest(recording)
+    summary = video.load_json(recording / "recording-summary.json")
+    brief = video.load_json(recording / "edit-brief.json")
+    composition = video.compile_brief(
+        summary, brief, video.HOUSE_STYLE, video.load_revealed_text(recording / "events.jsonl")
     )
     if write:
-        compose_video.write_composition(recording / "composition.js", composition)
+        video.write_composition(recording / "composition.js", composition)
     return composition
 
 
@@ -103,13 +100,7 @@ def serve(recording: Path):
 
 
 def _harness_command() -> list[str]:
-    local = ROOT / "browser-harness"
-    if local.is_file():
-        return [str(local)]
-    installed = shutil.which("browser-harness")
-    if installed:
-        return [installed]
-    raise RuntimeError("browser-harness command not found")
+    return [sys.executable, "-m", "browser_harness.run"]
 
 
 def run_harness(code: str, timeout: float = 60) -> dict:
@@ -119,7 +110,6 @@ def run_harness(code: str, timeout: float = 60) -> dict:
         input=code,
         text=True,
         capture_output=True,
-        cwd=ROOT,
         env=env,
         timeout=timeout,
         check=False,
@@ -246,7 +236,7 @@ def privacy_review(recording: Path, comp: dict) -> tuple[Path, list[dict]]:
         stale.unlink()
     captures = []
     redactions = comp.get("redact") or {}
-    for frame in used_frames(comp):
+    for frame in video.used_frames(comp):
         source = recording / frame
         if not source.is_file():
             raise RuntimeError(f"missing frame: {frame}")
@@ -303,7 +293,7 @@ def review(recording: Path) -> int:
         "warnings": warnings,
         "duration": round(sum(float(beat.get("dur") or 0) for beat in comp.get("beats") or []), 3),
         "artifactHashes": {
-            name: file_hash(recording / name) for name in sorted(REVIEW_ARTIFACTS)
+            name: video.file_hash(recording / name) for name in sorted(REVIEW_ARTIFACTS)
         },
         "normal": result["normal"],
         "reduced": result["reduced"],
@@ -386,11 +376,11 @@ def export(recording: Path, output_name: str, reviewed: bool) -> int:
         raise RuntimeError("ffmpeg and ffprobe are required")
     review_path = recording / "renderer-review.json"
     if not review_path.is_file():
-        raise RuntimeError("run render_video.py review first")
+        raise RuntimeError("run browser-harness video review first")
     review_report = json.loads(review_path.read_text(encoding="utf-8"))
     if review_report.get("errors"):
         raise RuntimeError("renderer review has blocking errors")
-    verify_source_manifest(recording)
+    video.verify_source_manifest(recording)
     comp = load_composition(recording)
     expected_comp = compile_recording(recording, write=False)
     if comp != expected_comp:
@@ -400,10 +390,10 @@ def export(recording: Path, output_name: str, reviewed: bool) -> int:
         raise RuntimeError("renderer review lacks content hashes; rerun it")
     for name, expected_hash in artifact_hashes.items():
         path = recording / name
-        if not path.is_file() or file_hash(path) != expected_hash:
+        if not path.is_file() or video.file_hash(path) != expected_hash:
             raise RuntimeError(f"{name} changed after review; rerun it")
     renderer = recording / "video.html"
-    if file_hash(renderer) != file_hash(TEMPLATE):
+    if video.file_hash(renderer) != video.file_hash(TEMPLATE):
         raise RuntimeError("renderer is not the current shared template; rerun review")
 
     output = Path(output_name)
@@ -476,7 +466,7 @@ def export(recording: Path, output_name: str, reviewed: bool) -> int:
         "conversionSeconds": round(conversion_seconds, 3),
         "verificationSeconds": round(verify_seconds, 3),
         "elapsedSeconds": round(time.monotonic() - started, 3),
-        "sha256": file_hash(output),
+        "sha256": video.file_hash(output),
         "probe": probe,
         "finalContactSheet": str(final_sheet),
     }
@@ -486,26 +476,3 @@ def export(recording: Path, output_name: str, reviewed: bool) -> int:
     print(f"final review: {final_sheet}")
     print(f"verified {actual:.2f}s MP4 in {report['elapsedSeconds']:.1f}s")
     return 0
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="command", required=True)
-    review_parser = sub.add_parser("review")
-    review_parser.add_argument("recording", type=Path)
-    export_parser = sub.add_parser("export")
-    export_parser.add_argument("recording", type=Path)
-    export_parser.add_argument("--output", default="video.mp4")
-    export_parser.add_argument("--reviewed", action="store_true")
-    args = parser.parse_args()
-    recording = args.recording.expanduser().resolve()
-    try:
-        if args.command == "review":
-            return review(recording)
-        return export(recording, args.output, args.reviewed)
-    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
-        parser.error(str(exc))
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
