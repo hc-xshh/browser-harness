@@ -88,6 +88,27 @@ INTERNAL = ("chrome://", "chrome-untrusted://", "devtools://", "chrome-extension
 BU_API = "https://api.browser-use.com/api/v3"
 REMOTE_ID = os.environ.get("BU_BROWSER_ID")
 BROWSER_KIND = "cloud" if REMOTE_ID else ("cdp" if (os.environ.get("BU_CDP_WS") or os.environ.get("BU_CDP_URL")) else "local")
+# Chrome 144+ shows a per-connection popup. Keep popup open enough to click.
+LOCAL_HANDSHAKE_TIMEOUT = 45
+
+
+def remote_debugging_user_enabled():
+    """chrome://inspect's "Allow remote debugging" toggle
+
+    True if any known profile records it on, False if one records it off, None
+    when no profile records it."""
+    seen = None
+    for base in PROFILES:
+        try:
+            state = json.loads((base / "Local State").read_text(encoding="utf-8", errors="replace"))
+            enabled = ((state.get("devtools") or {}).get("remote_debugging") or {}).get("user-enabled")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if enabled is True:
+            return True
+        if enabled is False:
+            seen = False
+    return seen
 
 
 def log(msg):
@@ -185,6 +206,8 @@ def get_ws_url():
                 raise RuntimeError("permission-blocked: Chrome is reachable, but the per-session Allow remote debugging popup has not been accepted")
         except (OSError, KeyError, ValueError):
             continue
+    if remote_debugging_user_enabled() is False:
+        raise RuntimeError('remote debugging is turned off for this browser instance — enable chrome://inspect/#remote-debugging (tick "Allow remote debugging for this browser instance")')
     raise RuntimeError(f"DevToolsActivePort not found in {[str(p) for p in PROFILES]} — enable chrome://inspect/#remote-debugging, or set BU_CDP_WS for a remote browser")
 
 
@@ -207,6 +230,17 @@ def stop_remote():
 
 def is_real_page(t):
     return t["type"] == "page" and not t.get("url", "").startswith(INTERNAL)
+
+
+class _PatientCDPClient(CDPClient):
+    """CDPClient with the WS opening handshake stretched to LOCAL_HANDSHAKE_TIMEOUT."""
+
+    async def start(self):
+        import websockets
+        if self.ws is not None:
+            raise RuntimeError("Client is already started")
+        self.ws = await websockets.connect(self.url, max_size=self.max_ws_frame_size, open_timeout=LOCAL_HANDSHAKE_TIMEOUT)
+        self._message_handler_task = asyncio.create_task(self._handle_messages())
 
 
 class Daemon:
@@ -263,7 +297,10 @@ class Daemon:
         self.stop = asyncio.Event()
         url = get_ws_url()
         log(f"connecting to {url}")
-        self.cdp = CDPClient(url)
+        self.cdp = _PatientCDPClient(url) if BROWSER_KIND == "local" else CDPClient(url)
+        if BROWSER_KIND == "local":
+            # Allow while this handshake is still parked on the popup
+            log("handshake-wait: if Chrome shows an 'Allow remote debugging?' popup, click Allow")
         try:
             await self.cdp.start()
         except Exception as e:
@@ -272,6 +309,11 @@ class Daemon:
                     f"CDP WS handshake failed: {e} -- remote browser WebSocket connection failed. "
                     "This can happen when network policy blocks the connection, the WS URL is wrong or expired, or the remote endpoint is down. "
                     "If you use Browser Use cloud, verify auth and get a fresh URL via start_remote_daemon()."
+                )
+            if BROWSER_KIND == "local" and ("timed out" in str(e).lower() or "403" in str(e)) and remote_debugging_user_enabled():
+                raise RuntimeError(
+                    f"permission-blocked: Chrome's 'Allow remote debugging?' popup was not accepted within {LOCAL_HANDSHAKE_TIMEOUT}s"
+                    " -- wait for the user to click Allow, then retry"
                 )
             raise RuntimeError(f"CDP WS handshake failed: {e} -- click Allow in Chrome if prompted, then retry")
         await self.attach_first_page()

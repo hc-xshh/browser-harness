@@ -334,11 +334,14 @@ def ensure_daemon(wait=60.0, name=None, env=None):
         # CDP WS to Chrome is dead — probe with a real CDP call and require "result".
         # Must go through ipc.connect so this works on Windows (TCP loopback) too;
         # raw AF_UNIX here would fail on every warm call and churn the daemon.
-        try:
-            s, token = ipc.connect(name or NAME, timeout=3.0)
-            resp = ipc.request(s, token, {"method": "Target.getTargets", "params": {}})
-            if "result" in resp: return
-        except Exception: pass
+        for last in (False, True):
+            try:
+                s, token = ipc.connect(name or NAME, timeout=3.0)
+                resp = ipc.request(s, token, {"method": "Target.getTargets", "params": {}})
+                if "result" in resp: return
+                break  # daemon answered with an error → CDP link truly dead
+            except Exception:
+                if not last: time.sleep(0.5)
         restart_daemon(name)
 
     import subprocess, sys
@@ -355,12 +358,22 @@ def ensure_daemon(wait=60.0, name=None, env=None):
         )
         if stderr_sink is not subprocess.DEVNULL:
             stderr_sink.close()
-        deadline = time.time() + wait
+        spawned = time.time()
+        deadline = spawned + wait
+        hinted = not local
         while time.time() < deadline:
             if daemon_alive(name): return
             if p.poll() is not None: break
+            if not hinted and time.time() - spawned > 2 and (_log_tail(name) or "").startswith("handshake-wait"):
+                print('browser-harness: Chrome is asking "Allow remote debugging?" — click Allow to continue.', file=sys.stderr)
+                hinted = True
             time.sleep(0.2)
         msg = _log_tail(name) or ""
+        if local and msg.startswith("handshake-wait"):
+            restart_daemon(name)
+            raise RuntimeError(
+                "permission-blocked: Chrome's Allow popup was not clicked in time -- wait for the user to click Allow, then retry."
+            )
         if local and attempt == 0 and _needs_chrome_permission_popup(msg):
             print('browser-harness: Chrome is asking "Allow remote debugging?". Click Allow in Chrome, then retry browser work.', file=sys.stderr)
             restart_daemon(name)
@@ -368,6 +381,14 @@ def ensure_daemon(wait=60.0, name=None, env=None):
                 "permission-blocked: wait for the user to click Allow in the Chrome permission popup before retrying."
             )
         if local and attempt == 0 and _needs_chrome_remote_debugging_prompt(msg):
+            from .daemon import remote_debugging_user_enabled
+            if remote_debugging_user_enabled():
+                # chrome://inspect toggle is already on — connection died
+                print('browser-harness: Chrome is asking "Allow remote debugging?". Click Allow in Chrome, then retry browser work.', file=sys.stderr)
+                restart_daemon(name)
+                raise RuntimeError(
+                    "permission-blocked: wait for the user to click Allow in the Chrome permission popup before retrying."
+                )
             _open_chrome_inspect()
             print('browser-harness: at chrome://inspect/#remote-debugging, tick "Allow remote debugging for this browser instance" and click Allow on the popup that appears', file=sys.stderr)
             restart_daemon(name)
