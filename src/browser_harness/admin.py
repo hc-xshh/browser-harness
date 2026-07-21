@@ -339,9 +339,9 @@ def ensure_daemon(wait=60.0, name=None, env=None):
                 s, token = ipc.connect(name or NAME, timeout=3.0)
                 resp = ipc.request(s, token, {"method": "Target.getTargets", "params": {}})
                 if "result" in resp: return
-                break  # daemon answered with an error → CDP link truly dead
             except Exception:
-                if not last: time.sleep(0.5)
+                pass
+            if not last: time.sleep(0.5)
         restart_daemon(name)
 
     import subprocess, sys

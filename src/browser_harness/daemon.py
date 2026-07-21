@@ -95,8 +95,8 @@ LOCAL_HANDSHAKE_TIMEOUT = 45
 def remote_debugging_user_enabled():
     """chrome://inspect's "Allow remote debugging" toggle
 
-    True if any known profile records it on, False if one records it off, None
-    when no profile records it."""
+    True only when a toggle-on profile also exposes a DevToolsActivePort.
+    False if a profile records it off, None when no profile records it."""
     seen = None
     for base in PROFILES:
         try:
@@ -104,7 +104,7 @@ def remote_debugging_user_enabled():
             enabled = ((state.get("devtools") or {}).get("remote_debugging") or {}).get("user-enabled")
         except (OSError, ValueError, AttributeError):
             continue
-        if enabled is True:
+        if enabled is True and (base / "DevToolsActivePort").exists():
             return True
         if enabled is False:
             seen = False
@@ -239,7 +239,10 @@ class _PatientCDPClient(CDPClient):
         import websockets
         if self.ws is not None:
             raise RuntimeError("Client is already started")
-        self.ws = await websockets.connect(self.url, max_size=self.max_ws_frame_size, open_timeout=LOCAL_HANDSHAKE_TIMEOUT)
+        connect_kwargs = {"max_size": self.max_ws_frame_size, "open_timeout": LOCAL_HANDSHAKE_TIMEOUT}
+        if self.additional_headers:
+            connect_kwargs["additional_headers"] = self.additional_headers
+        self.ws = await websockets.connect(self.url, **connect_kwargs)
         self._message_handler_task = asyncio.create_task(self._handle_messages())
 
 
